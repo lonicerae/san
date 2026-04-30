@@ -79,3 +79,44 @@ func TestQueuePendingItemsExcludeSentToInbox(t *testing.T) {
 		t.Fatalf("expected last pending index 0, got %d", q.LastPendingIndex())
 	}
 }
+
+func TestQueueDequeuePendingSkipsSentToInbox(t *testing.T) {
+	var q Queue
+	q.Enqueue("waiting", nil)
+	q.MarkSentToInbox(0)
+	q.Enqueue("pending", nil)
+
+	item, ok := q.DequeuePending()
+	if !ok {
+		t.Fatal("expected pending item")
+	}
+	if item.Content != "pending" {
+		t.Fatalf("expected pending item, got %q", item.Content)
+	}
+	if q.Len() != 1 {
+		t.Fatalf("expected sent item to remain, got len %d", q.Len())
+	}
+	remaining, _ := q.At(0)
+	if remaining.Content != "waiting" || !remaining.SentToInbox {
+		t.Fatalf("unexpected remaining item: %#v", remaining)
+	}
+}
+
+func TestQueueRemoveSentToInboxRemovesMatchingInjectedItem(t *testing.T) {
+	var q Queue
+	img := []core.Image{{FileName: "a.png", MediaType: "image/png"}}
+	q.Enqueue("pending", nil)
+	q.Enqueue("injected", img)
+	q.MarkSentToInbox(1)
+
+	if !q.RemoveSentToInbox("injected", img) {
+		t.Fatal("expected matching sent item to be removed")
+	}
+	if q.Len() != 1 {
+		t.Fatalf("expected one remaining item, got %d", q.Len())
+	}
+	remaining, _ := q.At(0)
+	if remaining.Content != "pending" {
+		t.Fatalf("expected pending item to remain, got %q", remaining.Content)
+	}
+}

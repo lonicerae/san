@@ -21,6 +21,7 @@ type Runtime interface {
 	ContinueOutbox() tea.Cmd
 	BeginInferTurn()
 	SetTokenUsage(resp *core.InferResponse)
+	HandleAgentMessage(msg core.Message) tea.Cmd
 	ProcessToolResult(tr core.ToolResult) *core.ToolResult
 	ProcessTurnEnd(result core.Result) tea.Cmd
 	ProcessAgentStop(err error) tea.Cmd

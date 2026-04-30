@@ -117,8 +117,14 @@ func handleAgentEventBatch(rt Runtime, m *Model, events []core.Event, closed boo
 
 func applyAgentEvent(rt Runtime, m *Model, ev core.Event) tea.Cmd {
 	switch ev.Type {
-	case core.OnStart, core.OnMessage:
+	case core.OnStart:
 		return nil
+	case core.OnMessage:
+		msg, ok := ev.Message()
+		if !ok {
+			return nil
+		}
+		return rt.HandleAgentMessage(msg)
 	case core.PreInfer:
 		return applyPreInfer(rt, m)
 	case core.OnChunk:

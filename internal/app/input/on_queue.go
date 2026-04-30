@@ -1,6 +1,7 @@
 package input
 
 import (
+	"reflect"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,6 +46,19 @@ func (q *Queue) Dequeue() (QueueItem, bool) {
 	q.items[0] = QueueItem{}
 	q.items = q.items[1:]
 	return item, true
+}
+
+func (q *Queue) DequeuePending() (QueueItem, bool) {
+	for i, item := range q.items {
+		if item.SentToInbox {
+			continue
+		}
+		q.items[i] = QueueItem{}
+		q.items = append(q.items[:i], q.items[i+1:]...)
+		q.adjustSelectionAfterRemove(i)
+		return item, true
+	}
+	return QueueItem{}, false
 }
 
 func (q *Queue) At(idx int) (QueueItem, bool) {
@@ -127,7 +141,37 @@ func (q *Queue) MarkSentToInbox(idx int) {
 	}
 }
 
+func (q *Queue) RemoveSentToInbox(content string, images []core.Image) bool {
+	for i, item := range q.items {
+		if !item.SentToInbox {
+			continue
+		}
+		if item.Content == content && reflect.DeepEqual(item.Images, images) {
+			q.items[i] = QueueItem{}
+			q.items = append(q.items[:i], q.items[i+1:]...)
+			q.adjustSelectionAfterRemove(i)
+			return true
+		}
+	}
+	return false
+}
+
 func (q *Queue) Clear() { q.items = nil }
+
+func (q *Queue) adjustSelectionAfterRemove(idx int) {
+	if q.SelectIdx < 0 {
+		return
+	}
+	switch {
+	case len(q.items) == 0:
+		q.SelectIdx = -1
+		q.Stashed = ""
+	case q.SelectIdx > idx:
+		q.SelectIdx--
+	case q.SelectIdx >= len(q.items):
+		q.SelectIdx = len(q.items) - 1
+	}
+}
 
 // HandleQueueSelectKey handles keys when a queue item is selected.
 // Only Up, Down, Enter, Escape, and Ctrl+C are intercepted; all other keys pass

@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/yanmxa/gencode/internal/app/conv"
+	"github.com/yanmxa/gencode/internal/app/input"
 	"github.com/yanmxa/gencode/internal/core"
+	"github.com/yanmxa/gencode/internal/task/tracker"
 )
 
 func TestSetTokenUsageTracksLatestTurnUsage(t *testing.T) {
@@ -88,5 +91,45 @@ func TestResetContextDisplayPreservesTurnTotals(t *testing.T) {
 	}
 	if m.env.TurnInputTokens != 1600 || m.env.TurnOutputTokens != 105 {
 		t.Fatalf("turn totals changed unexpectedly: in:%d out:%d", m.env.TurnInputTokens, m.env.TurnOutputTokens)
+	}
+}
+
+func TestHandleAgentMessageRemovesInjectedQueuedInput(t *testing.T) {
+	m := &model{
+		userInput: input.Model{Queue: input.NewQueue()},
+		conv:      conv.NewModel(80),
+		services:  services{Tracker: tracker.NewStore()},
+	}
+	m.userInput.Queue.Enqueue("queued message", nil)
+	m.userInput.Queue.MarkSentToInbox(0)
+
+	_ = m.HandleAgentMessage(core.UserMessage("queued message", nil))
+
+	if m.userInput.Queue.Len() != 0 {
+		t.Fatalf("queue len = %d, want 0", m.userInput.Queue.Len())
+	}
+	if len(m.conv.Messages) != 1 {
+		t.Fatalf("conversation messages = %d, want 1", len(m.conv.Messages))
+	}
+	if got := m.conv.Messages[0].Content; got != "queued message" {
+		t.Fatalf("message content = %q, want queued message", got)
+	}
+}
+
+func TestDrainTurnQueuesWaitsForSentQueuedInputInjection(t *testing.T) {
+	m := &model{userInput: input.Model{Queue: input.NewQueue()}}
+	m.userInput.Queue.Enqueue("already sent", nil)
+	m.userInput.Queue.MarkSentToInbox(0)
+
+	cmd, found := m.drainTurnQueues()
+
+	if !found {
+		t.Fatal("expected waiting queued input to hold the turn boundary")
+	}
+	if cmd != nil {
+		t.Fatalf("cmd = %#v, want nil", cmd)
+	}
+	if m.userInput.Queue.Len() != 1 {
+		t.Fatalf("queue len = %d, want waiting item retained", m.userInput.Queue.Len())
 	}
 }
