@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.15.8] - 2026-04-30
+
+### Added
+
+- Queue selection: Up/Down keys now navigate between queue items and history entries seamlessly
+
+### Changed
+
+- Tool execution: parallel only for read-only batches; sequential when side effects are possible
+- Better edit tool error messages when old_string not found or not unique
+- System prompts: clarify dependent tool calls must not be batched
+- Update queue selected item styling with background highlight
+
+### Fixed
+
+- Checkout full history to find CHANGELOG sections in release workflow
+
 ## [v1.15.7] - 2026-04-30
 
 ### Fixed
