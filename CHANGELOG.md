@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - Queue selection: Up/Down keys now navigate between queue items and history entries seamlessly
 
+### Added
+
+- Fetch OpenAI model token limits from official developer docs with caching
+
 ### Changed
 
 - Tool execution: parallel only for read-only batches; sequential when side effects are possible
