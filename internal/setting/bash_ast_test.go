@@ -43,6 +43,8 @@ func Test_extractCommandsAST(t *testing.T) {
 		{"env var wrapper", "NODE_ENV=prod npm start", []string{"npm"}},
 		{"timeout wrapper", "timeout 30 make test", []string{"make"}},
 		{"nice wrapper", "nice -n 10 gcc main.c", []string{"gcc"}},
+		{"stdbuf wrapper", "stdbuf -oL npm test", []string{"npm"}},
+		{"ionice not stripped", "ionice -c2 make test", []string{"ionice"}},
 	}
 
 	for _, tt := range tests {

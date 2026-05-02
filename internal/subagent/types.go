@@ -4,6 +4,7 @@
 package subagent
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -14,122 +15,305 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PermissionMode controls how the agent handles permission requests
+// PermissionMode controls the default permission policy for an agent.
+// See docs/gen-permission.md for the full pipeline.
 type PermissionMode string
 
 const (
-	// PermissionDefault uses the default subagent permission flow.
+	// PermissionDefault: reads auto, mutations Ask. In a subagent Ask
+	// collapses to Deny, so mutations are blocked.
 	PermissionDefault PermissionMode = "default"
-	// PermissionEdit auto-accepts file edits but prompts for other operations.
-	PermissionEdit PermissionMode = "edit"
-	// PermissionExplore only allows non-mutating exploration tools.
+
+	// PermissionAcceptEdits: reads + edit/write auto, Bash/exec/agent Ask.
+	PermissionAcceptEdits PermissionMode = "acceptEdits"
+
+	// PermissionExplore: reads auto, mutations explicitly Deny (never Ask).
+	// Used for research and read-only investigation.
 	PermissionExplore PermissionMode = "explore"
+
+	// PermissionBypass: everything Allow except bypass-immune checks
+	// (sensitive paths, destructive bash) which still gate the call.
+	PermissionBypass PermissionMode = "bypassPermissions"
+
+	// PermissionDontAsk: reads auto, everything else silently Deny.
+	// TODO: not yet wired into the main loop pipeline; behaves as
+	// PermissionDefault in subagent context (Ask -> Deny is automatic).
+	PermissionDontAsk PermissionMode = "dontAsk"
+
+	// PermissionAuto: long-running subagent mode. Auto-approves more than
+	// acceptEdits, including benign Bash, with a safety classifier on the
+	// rest. TODO: classifier not implemented; treated as PermissionAcceptEdits.
+	PermissionAuto PermissionMode = "auto"
 )
 
-// ToolList is a list of tool names with flexible YAML parsing.
-// nil means "all tools". Non-nil means only these tools are allowed.
-// Supports CC-compatible formats: string, array, or map.
-type ToolList []string
+// NormalizePermissionMode trims and case-corrects a permission mode string.
+// Empty string defaults to PermissionDefault.
+func NormalizePermissionMode(s string) PermissionMode {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return PermissionDefault
+	}
+	return PermissionMode(s)
+}
 
-// UnmarshalYAML handles multiple YAML formats for tool lists:
-//   - string: "Read, Write, Bash" (comma-separated)
-//   - array:  [Read, Write, Bash]
-//   - map:    {Read: true, Write: true} (CC format)
-//   - legacy: {mode: allowlist, allow: [...]} (old GenCode format)
+// ToolRule is a single allow/deny entry. Pattern follows the unified
+// "Tool(pattern)" glob syntax shared with settings.permissions — see
+// docs/gen-permission.md.
+type ToolRule struct {
+	Name    string `yaml:"name" json:"name"`
+	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty"`
+}
+
+// Rule renders the rule as "Tool(pattern)" for the matcher, or just "Tool"
+// when there is no pattern.
+func (r ToolRule) Rule() string {
+	if r.Pattern == "" {
+		return r.Name
+	}
+	return r.Name + "(" + r.Pattern + ")"
+}
+
+// ToolList is a list of tool rules. nil means "all tools" in allow contexts.
+// A bare entry covers the whole tool; a parameterized entry covers only
+// calls whose arguments match the pattern.
+type ToolList []ToolRule
+
+func ToolNames(names ...string) ToolList {
+	tools := make(ToolList, 0, len(names))
+	for _, name := range names {
+		tools = append(tools, ToolRule{Name: name})
+	}
+	return tools
+}
+
+func (t ToolList) Names() []string {
+	if t == nil {
+		return nil
+	}
+	names := make([]string, 0, len(t))
+	for _, rule := range t {
+		if rule.Name != "" {
+			names = append(names, rule.Name)
+		}
+	}
+	return names
+}
+
+func (t ToolList) BareNames() []string {
+	if t == nil {
+		return nil
+	}
+	names := make([]string, 0, len(t))
+	for _, rule := range t {
+		if rule.Name != "" && rule.Pattern == "" {
+			names = append(names, rule.Name)
+		}
+	}
+	return names
+}
+
+// DisplayNames renders rules for UI listing: "Read" or "Bash(git diff*)".
+func (t ToolList) DisplayNames() []string {
+	names := make([]string, 0, len(t))
+	for _, rule := range t {
+		if rule.Name == "" {
+			continue
+		}
+		names = append(names, rule.Rule())
+	}
+	return names
+}
+
+// ConstrainedDisplayNames returns only rules with parameter constraints,
+// for surfacing in the agent's system prompt.
+func (t ToolList) ConstrainedDisplayNames() []string {
+	names := make([]string, 0, len(t))
+	for _, rule := range t {
+		if rule.Pattern == "" {
+			continue
+		}
+		names = append(names, rule.Rule())
+	}
+	return names
+}
+
+func (t ToolList) HasName(name string) bool {
+	for _, rule := range t {
+		if rule.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (t ToolList) HasPattern(name string) bool {
+	for _, rule := range t {
+		if rule.Name == name && rule.Pattern != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// UnmarshalYAML accepts every form documented in docs/gen-permission.md:
+//   - string list:    "Read, Write, Bash"        (comma-separated)
+//   - sequence:       [Read, Write, Bash(git diff*)]
+//   - sequence map:   [{name: Bash, pattern: "git diff*"}]
+//   - mapping:        {Read: true, Bash: "git diff*"}
 func (t *ToolList) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.ScalarNode:
-		for _, p := range strings.Split(value.Value, ",") {
-			if s := strings.TrimSpace(p); s != "" {
-				*t = append(*t, s)
+		for p := range strings.SplitSeq(value.Value, ",") {
+			if rule, ok := parseRuleString(p); ok {
+				*t = append(*t, rule)
 			}
 		}
 	case yaml.SequenceNode:
-		var items []string
-		if err := value.Decode(&items); err != nil {
-			return err
+		for _, item := range value.Content {
+			rules, err := parseToolRuleNode(item)
+			if err != nil {
+				return err
+			}
+			*t = append(*t, rules...)
 		}
-		*t = items
 	case yaml.MappingNode:
-		var m map[string]any
-		if err := value.Decode(&m); err != nil {
+		rules, err := parseToolRuleNode(value)
+		if err != nil {
 			return err
 		}
-		// Legacy GenCode format: {mode: allowlist, allow: [...]}
-		if _, hasMode := m["mode"]; hasMode {
-			if allow, ok := m["allow"].([]any); ok {
-				for _, a := range allow {
-					if s, ok := a.(string); ok {
-						*t = append(*t, s)
-					}
-				}
-			}
-			return nil
-		}
-		// CC format: {Read: true, Write: true}
-		for k, v := range m {
-			if b, ok := v.(bool); ok && b {
-				*t = append(*t, k)
-			}
-		}
+		*t = append(*t, rules...)
 	}
 	return nil
 }
 
-// AgentConfig defines the configuration for an agent type
+// parseRuleString accepts "Read" or "Bash(git diff*)" and returns a ToolRule.
+func parseRuleString(s string) (ToolRule, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ToolRule{}, false
+	}
+	open := strings.IndexByte(s, '(')
+	if open < 0 || !strings.HasSuffix(s, ")") {
+		return ToolRule{Name: s}, true
+	}
+	name := strings.TrimSpace(s[:open])
+	if name == "" {
+		return ToolRule{}, false
+	}
+	return ToolRule{Name: name, Pattern: strings.TrimSpace(s[open+1 : len(s)-1])}, true
+}
+
+func parseToolRuleNode(node *yaml.Node) ([]ToolRule, error) {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if rule, ok := parseRuleString(node.Value); ok {
+			return []ToolRule{rule}, nil
+		}
+		return nil, nil
+	case yaml.MappingNode:
+		return parseToolRuleMap(node)
+	default:
+		return nil, fmt.Errorf("unsupported tool rule format")
+	}
+}
+
+func parseToolRuleMap(node *yaml.Node) ([]ToolRule, error) {
+	var rules []ToolRule
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		value := node.Content[i+1]
+		// Object form: { name: Bash, pattern: "git diff*" }.
+		if key == "name" || key == "pattern" {
+			if rule := parseObjectToolRule(node); rule.Name != "" {
+				return []ToolRule{rule}, nil
+			}
+			return nil, nil
+		}
+		rule, ok, err := parseNamedToolRule(key, value)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			rules = append(rules, rule)
+		}
+	}
+	return rules, nil
+}
+
+// parseObjectToolRule reads { name: Bash, pattern: "git diff*" }.
+func parseObjectToolRule(node *yaml.Node) ToolRule {
+	var rule ToolRule
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		switch node.Content[i].Value {
+		case "name":
+			rule.Name = strings.TrimSpace(node.Content[i+1].Value)
+		case "pattern":
+			rule.Pattern = strings.TrimSpace(node.Content[i+1].Value)
+		}
+	}
+	return rule
+}
+
+// parseNamedToolRule reads a tool-name keyed entry:
+//
+//	Read: true                         → {Name: Read}
+//	Read: false                        → omitted
+//	Bash: "git diff*"                  → {Name: Bash, Pattern: "git diff*"}
+//	Bash: { pattern: "git diff*" }     → {Name: Bash, Pattern: "git diff*"}
+func parseNamedToolRule(name string, value *yaml.Node) (ToolRule, bool, error) {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		switch value.Value {
+		case "true":
+			return ToolRule{Name: name}, true, nil
+		case "false", "":
+			return ToolRule{}, false, nil
+		default:
+			return ToolRule{Name: name, Pattern: strings.TrimSpace(value.Value)}, true, nil
+		}
+	case yaml.MappingNode:
+		var pattern string
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			if value.Content[i].Value == "pattern" {
+				pattern = strings.TrimSpace(value.Content[i+1].Value)
+			}
+		}
+		return ToolRule{Name: name, Pattern: pattern}, true, nil
+	}
+	return ToolRule{}, false, fmt.Errorf("unsupported rule for tool %q", name)
+}
+
+// AgentConfig defines the configuration for an agent type.
 type AgentConfig struct {
-	// Name is the unique identifier for this agent type
-	Name string `yaml:"name" json:"name"`
-
-	// Description describes what this agent does (used for LLM decision making)
+	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description" json:"description"`
+	Color       string `yaml:"color,omitempty" json:"color,omitempty"`
+	WhenToUse   string `yaml:"when-to-use,omitempty" json:"when_to_use,omitempty"`
+	Model       string `yaml:"model" json:"model"`
 
-	// Color is the display color used for this agent in the UI.
-	Color string `yaml:"color,omitempty" json:"color,omitempty"`
+	// PermissionMode is the default policy when no allow/deny rule matches.
+	PermissionMode PermissionMode `yaml:"mode" json:"mode"`
 
-	// WhenToUse provides guidance on when to use this agent (shown in <available-agents>)
-	WhenToUse string `yaml:"when-to-use,omitempty" json:"when_to_use,omitempty"`
+	// AllowTools is the per-agent allow list. Same Tool(pattern) syntax as
+	// settings.permissions.allow. nil = all tools available; non-nil also
+	// acts as a schema filter (LLM only sees these tools).
+	AllowTools ToolList `yaml:"allow_tools" json:"allow_tools"`
 
-	// Model specifies the model to use (inherit, sonnet, opus, haiku)
-	Model string `yaml:"model" json:"model"`
+	// DenyTools is the per-agent deny list. Same syntax as
+	// settings.permissions.deny. Always wins over AllowTools and mode.
+	DenyTools ToolList `yaml:"deny_tools,omitempty" json:"deny_tools,omitempty"`
 
-	// PermissionMode controls how permissions are handled
-	PermissionMode PermissionMode `yaml:"permission-mode" json:"permission_mode"`
+	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty"`
+	SystemPrompt string   `yaml:"system-prompt,omitempty" json:"system_prompt,omitempty"`
+	MaxTurns     int      `yaml:"max-turns" json:"max_turns"`
+	Source       string   `yaml:"-" json:"source,omitempty"`
+	McpServers   []string `yaml:"mcp-servers,omitempty" json:"mcp_servers,omitempty"`
+	SourceFile   string   `yaml:"-" json:"-"`
 
-	// Tools lists allowed tools. nil = all tools; non-nil = only listed tools.
-	// Supports CC-compatible formats (comma string, array, map).
-	Tools ToolList `yaml:"tools" json:"tools"`
-
-	// DisallowedTools lists tools to exclude. Applied after allow list filtering.
-	// Supports the same CC-compatible formats as Tools.
-	DisallowedTools ToolList `yaml:"disallowed-tools,omitempty" json:"disallowed_tools,omitempty"`
-
-	// Skills lists skills to preload
-	Skills []string `yaml:"skills,omitempty" json:"skills,omitempty"`
-
-	// SystemPrompt provides additional system prompt content
-	SystemPrompt string `yaml:"system-prompt,omitempty" json:"system_prompt,omitempty"`
-
-	// MaxTurns limits the number of conversation turns
-	MaxTurns int `yaml:"max-turns" json:"max_turns"`
-
-	// Source indicates where this agent was loaded from (built-in, user, project, plugin)
-	Source string `yaml:"-" json:"source,omitempty"`
-
-	// McpServers lists MCP servers this agent should connect to
-	McpServers []string `yaml:"mcp-servers,omitempty" json:"mcp_servers,omitempty"`
-
-	// SourceFile is the file path if loaded from AGENT.md (internal use)
-	SourceFile string `yaml:"-" json:"-"`
-
-	// systemPromptOnce ensures the system prompt is loaded exactly once.
-	// AgentConfig must not be copied after first use — always use *AgentConfig pointers.
 	systemPromptOnce sync.Once `yaml:"-" json:"-"`
 }
 
 // GetSystemPrompt returns the system prompt, loading it lazily if needed.
-// For file-based agents, the prompt is loaded from SourceFile on first access.
-// Safe for concurrent use.
 func (c *AgentConfig) GetSystemPrompt() string {
 	c.systemPromptOnce.Do(func() {
 		if c.SourceFile != "" {
@@ -146,96 +330,39 @@ type ProgressCallback func(msg string)
 
 // AgentRequest represents a request to spawn an agent
 type AgentRequest struct {
-	// Agent is the name of the agent type to use
-	Agent string
-
-	// Name is an optional display name for the agent instance
-	Name string
-
-	// Prompt is the task for the agent to perform
-	Prompt string
-
-	// Description is a short (3-5 word) description of the task
-	Description string
-
-	// Background if true, runs the agent in background
-	Background bool
-
-	// Model overrides the agent's default model
-	Model string
-
-	// MaxTurns overrides the agent's max turns
-	MaxTurns int
-
-	// Mode overrides the agent's permission mode for this invocation
-	Mode string
-
-	// ResumeID is an optional agent ID to resume from a previous invocation
-	ResumeID string
-
-	// LiveTaskID links a running background task to this request so follow-up
-	// messages can be injected at safe loop boundaries while the worker is active.
-	LiveTaskID string
-
-	// Isolation specifies isolation mode (e.g., "worktree" for git worktree)
-	Isolation string
-
-	// TeamName is the team name for spawning
-	TeamName string
-
-	// ParentMessages is the conversation history from the parent (for context)
+	Agent          string
+	Name           string
+	Prompt         string
+	Description    string
+	Background     bool
+	Model          string
+	MaxTurns       int
+	Mode           string
+	ResumeID       string
+	LiveTaskID     string
+	Isolation      string
+	TeamName       string
 	ParentMessages []core.Message
-
-	// OnProgress is called when the agent makes progress (tool execution, etc.)
-	OnProgress ProgressCallback
-
-	// OnQuestion is called when the agent needs an interactive question answered.
-	OnQuestion tool.AskQuestionFunc
+	OnProgress     ProgressCallback
+	OnQuestion     tool.AskQuestionFunc
 }
 
 // AgentResult contains the result of an agent execution
 type AgentResult struct {
-	// AgentID is the unique identifier for this agent instance
-	AgentID string
-
-	// AgentName is the name of the agent type used
-	AgentName string
-
-	// Model is the model ID used for execution
-	Model string
-
-	// Success indicates whether the agent completed successfully
-	Success bool
-
-	// Content is the final response content from the agent
-	Content string
-
-	// Summary is a brief summary of what was accomplished
-	Summary string
-
-	// TranscriptPath points at the persisted transcript/output file when available.
+	AgentID        string
+	AgentName      string
+	Model          string
+	Success        bool
+	Content        string
+	Summary        string
 	TranscriptPath string
-
-	// Messages contains the full conversation history
-	Messages []core.Message
-
-	// TurnCount is the number of turns used
-	TurnCount int
-
-	// ToolUses is the number of tool calls executed
-	ToolUses int
-
-	// TokenUsage is the total tokens consumed
-	TokenUsage llm.TokenUsage
-
-	// Duration is the total execution time
-	Duration time.Duration
-
-	// Progress contains all intermediate progress messages (tool calls made)
-	Progress []string
-
-	// Error contains any error message if not successful
-	Error string
+	Messages       []core.Message
+	TurnCount      int
+	ToolUses       int
+	TokenUsage     llm.TokenUsage
+	Duration       time.Duration
+	Progress       []string
+	Error          string
 }
 
 // defaultMaxTurns is the default maximum number of conversation turns

@@ -15,6 +15,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Settings represents the complete GenCode configuration.
@@ -33,9 +34,10 @@ type Settings struct {
 // PermissionSettings defines permission rules for tool execution.
 // Rule format: "Tool(pattern)" — e.g. "Bash(npm:*)", "Read(**/.env)".
 type PermissionSettings struct {
-	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
-	Ask   []string `json:"ask,omitempty"`
+	DefaultMode string   `json:"defaultMode,omitempty"`
+	Allow       []string `json:"allow,omitempty"`
+	Deny        []string `json:"deny,omitempty"`
+	Ask         []string `json:"ask,omitempty"`
 }
 
 // Hook defines an event hook configuration.
@@ -165,6 +167,20 @@ func (m OperationMode) String() string {
 	}
 }
 
+func OperationModeFromString(mode string) OperationMode {
+	mode = strings.TrimSpace(mode)
+	switch mode {
+	case "acceptEdits", "accept-edits", "autoAccept", "auto-accept":
+		return ModeAutoAccept
+	case "bypassPermissions", "bypass-permissions", "bypass":
+		return ModeBypassPermissions
+	case "dontAsk", "dont-ask":
+		return ModeDontAsk
+	default:
+		return ModeNormal
+	}
+}
+
 func (m OperationMode) Next() OperationMode {
 	for i, mode := range cycleModes {
 		if mode == m {
@@ -252,6 +268,7 @@ func (s *Settings) Clone() *Settings {
 		return defaultSettings()
 	}
 	dst := NewSettings()
+	dst.Permissions.DefaultMode = s.Permissions.DefaultMode
 	dst.Permissions.Allow = append([]string(nil), s.Permissions.Allow...)
 	dst.Permissions.Deny = append([]string(nil), s.Permissions.Deny...)
 	dst.Permissions.Ask = append([]string(nil), s.Permissions.Ask...)

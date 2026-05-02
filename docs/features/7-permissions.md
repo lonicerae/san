@@ -1,31 +1,68 @@
 # Feature 7: Permission System
 
-## Overview
-
 Controls whether tool calls are allowed, denied, or prompted to the user.
+Same pipeline runs in the main loop and in subagents — see
+[`docs/gen-permission.md`](../gen-permission.md) for the user-facing spec
+and [`docs/permission.md`](../permission.md) for the implementation walk.
 
-**Permission modes:**
+## Modes
+
+Main-loop modes (selectable via `Shift+Tab`, `--permission-mode`, or
+`defaultMode` in settings):
+
+| Mode | Auto-approves | Use case |
+|------|---------------|----------|
+| `default` | Reads only | Sensitive work; review every mutation |
+| `acceptEdits` | Reads + edit/write tools | Code iteration |
+| `dontAsk` | Pre-allowed only; everything else silent Deny | Non-interactive runs (`gen -p ...`, scripts, CI) |
+| `bypassPermissions` | Everything | Containers / CI; bypass-immune still enforced |
+| `auto` *(TODO)* | Currently aliased to `acceptEdits` | Long-running unattended sessions; classifier pending |
+
+Subagent-only mode:
 
 | Mode | Behavior |
 |------|----------|
-| `Normal` | Prompt user before every tool execution |
-| `AutoAccept` | Auto-approve reads and edits |
-| `Plan` | Only read-only tools allowed |
-| `BypassPermissions` | Auto-approve all (bypass-immune paths still enforced) |
-| `DontAsk` | Convert all prompts into automatic denials |
+| `explore` | Read-only investigation pass; mutations explicitly Deny so the agent does not waste turns trying them |
 
-**Rule syntax:** `Tool(pattern)` — e.g. `Bash(npm:*)`, `Read(**/.env)`
+Subagents collapse `Ask → Deny` automatically, so a subagent in `default`
+behaves like a read-only assistant.
 
-- `allow` list — auto-approve matching calls
-- `deny` list — block matching calls
-- `ask` list — always prompt for matching calls
+## Rule Syntax
 
-Working directory enforcement prevents edits outside the project root.
-Sensitive paths and destructive commands remain bypass-immune even in `BypassPermissions` mode.
+`Tool(pattern)` glob string. Used identically in:
 
-## UI Interactions
+- `permissions.allow` / `permissions.ask` / `permissions.deny` in `settings.json`
+- `allow_tools` / `deny_tools` in agent frontmatter
 
-- **Confirmation dialog**: shows tool name and input; press `y` to approve, `n` to deny, `a` to allow always.
+```
+Bash(git:*)              # any git subcommand
+Bash(npm run *)          # space-style natural pattern
+Read(./src/**)           # cwd-relative path
+WebFetch(domain:github.com)
+Skill(git:*)
+```
+
+Bash compound commands (`&&`, `||`, `;`, `|`, `&`) are split via shell AST.
+**Allow rules require every subcommand to match**; deny / ask rules fire on
+any subcommand match. Bypass-immune destructive checks (`rm -rf`, `git push
+--force`, etc.) apply per subcommand and cannot be silenced.
+
+## Priority
+
+```
+deny > ask > allow > mode default
+```
+
+Both `settings.{allow,deny,ask}` and `agent.{allow_tools,deny_tools}` feed
+the same pipeline.
+
+Sensitive paths and destructive commands remain bypass-immune even in
+`bypassPermissions` mode.
+
+## UI Interactions (main loop only)
+
+- **Confirmation dialog**: shows tool name + input; `y` approve, `n` deny,
+  `a` always allow.
 - **Denied tool**: shows an inline error in the conversation.
 - **Allow-list match**: tool runs silently without any dialog.
 
@@ -34,140 +71,102 @@ Sensitive paths and destructive commands remain bypass-immune even in `BypassPer
 ```bash
 go test ./internal/setting/... -v -run TestPermission
 go test ./internal/tool/perm/... -v
+go test ./internal/subagent/... -v -run 'Mode|Permission|Allow|Deny'
 go test ./tests/integration/permission/... -v
 ```
 
-Covered:
+Key cases:
 
 ```
-# Integration tests
-TestPermission_PermitAll_AllowsWrite        — PermitAll mode allows write operations
-TestPermission_ReadOnly_BlocksWrite         — ReadOnly mode blocks write operations
-TestPermission_ReadOnly_AllowsRead          — ReadOnly mode allows read operations
-TestPermission_DenyAll_BlocksEverything     — DenyAll mode blocks all operations
-TestPermission_ExecTool_Directly            — direct tool execution path
+# Unified pipeline (setting)
+TestMatchRule                                — rule pattern matching
+TestBuildRule                                — rule string construction
+TestCheckPermission                          — deny / allow / ask / mode interactions
+TestBypassPermissionsMode                    — bypass + bypass-immune still enforced
+TestDontAskMode                              — Ask coerced to Deny
+TestDenyRulesPriorityOverSession             — deny absolute
+TestSafeToolAllowlist                        — safe tools auto-allow
+TestIsDestructiveCommand                     — destructive pattern catch
+TestIsSensitivePath                          — sensitive path catch
+TestCheckBashSecurity                        — injection / obfuscation
+TestBashSecurityBypassImmune                 — security checks always fire
 
-# Config permission tests
-TestMatchRule                               — rule pattern matching (11 sub-tests)
-TestBuildRule                               — rule building (5 sub-tests)
-TestCheckPermission                         — permission checks (13+ sub-tests)
-TestCheckPermissionWithReason               — permission with reason tracking
-TestDenialTracking                          — denial fallback mechanism
-TestIsDestructiveCommand                    — dangerous command detection (13 sub-tests)
-TestIsSensitivePath                         — sensitive path detection (13 sub-tests)
-TestSensitivePathsBypassImmune              — bypass-immune bypass rules
-TestCheckBashSecurity                       — bash security checks (13 sub-tests)
-TestBashSecurityBypassImmune                — bash security bypass-immune
+# Subagent gate (steps 1-4 of unified pipeline + Ask→Deny coercion)
+TestExploreModeAllowsOnlyGitDiffBash         — allow_tools per-subcommand match
+TestDefaultModeRestrictsConfiguredBash       — allow_tools whitelist
+TestDenyToolRulesMatchPatterns               — deny_tools any-subcommand
+TestExploreModeFiltersMutatingToolSchemas    — schema filter
+TestAcceptEditsModeFiltersApprovalOnlyToolSchemas
+TestBypassModeAllowsEverything
+TestNormalizePermissionModeDefaultsEmpty
 
-# Permission modes
-TestBypassPermissionsMode                   — bypass permissions mode
-TestDontAskMode                             — DontAsk converts all prompts to denials
-TestDenyRuleBlocksBypass                     — deny rules block bypass mode
-TestDenyRulesPriorityOverSession            — deny rules override session allow
-TestDestructiveCommandsRequireConfirmation   — destructive commands need confirm
-TestWorkingDirectoryConstraint              — edits outside project root blocked
-TestSafeToolAllowlist                       — safe tool whitelist
-TestPassthroughBehavior                     — passthrough permission behavior
-TestResolveHookAllow                        — hook allow resolution
-TestOperationModeNext                       — operation mode cycling
-
-# Glob pattern matching
-TestPermission_GlobPattern_MatchesCorrectly — ** nested paths, *.env matching
-TestIsInWorkingDirectory                    — working directory check
-TestNormalizeMacOSPath                      — macOS path normalization
-TestIsSubpath                               — subpath detection
-
-# Read-only tool detection
-TestIsReadOnlyToolMatchesConfig             — read-only tool identification
-TestIsSafeToolMatchesConfig                 — safe tool identification
+# Read-only / safe tool detection
+TestIsReadOnlyToolMatchesConfig
+TestIsSafeToolMatchesConfig
 ```
 
-Cases to add:
+## Interactive Tests
 
-```go
-func TestPermission_AskList_AlwaysPrompts(t *testing.T) {
-    // Tools matching ask list must always prompt even in AutoAccept mode
-}
+`gen agent run --type <name> --prompt "..."` runs an AGENT.md fixture
+through the full subagent pipeline. Use this to verify allow / deny / mode
+behavior end-to-end without a TUI.
 
-func TestPermission_AllowDenyConflict_DenyWins(t *testing.T) {
-    // When a tool matches both allow and deny, deny must take precedence
-}
+```bash
+mkdir -p .gen/agents
+cat > .gen/agents/test-perm.md <<'EOF'
+---
+name: test-perm
+description: Permission gate fixture
+mode: explore
+allow_tools:
+  - Read
+  - Bash(git diff*)
+  - Bash(git log*)
+deny_tools:
+  - Bash(git stash*)
+---
+You are a test fixture. Run exactly what the user asks.
+After each call output: RESULT: <tool>(<args>) -> <ALLOWED|DENIED: reason>
+EOF
 
-func TestPermission_BypassPermissions_BypassImmune_Enforced(t *testing.T) {
-    // bypass-immune paths must still be blocked in BypassPermissions mode
-}
+# Allow path
+./bin/gen agent run --type test-perm --prompt 'Run bash: git diff --stat'
+#  → ALLOWED
 
+# Per-subcommand allow rejects when one part doesn't match
+./bin/gen agent run --type test-perm --prompt 'Run bash: git diff && git status'
+#  → DENIED: tool Bash call is outside the allow_tools constraint
+
+# Deny wins over allow
+./bin/gen agent run --type test-perm --prompt 'Run bash: git stash list'
+#  → DENIED: tool Bash is blocked by deny_tools
+
+# Bypass-immune wins over everything below it
+./bin/gen agent run --type test-perm --prompt 'Run bash: git diff && rm -rf /tmp/dummy'
+#  → DENIED: destructive command
 ```
 
-## Interactive Tests (tmux)
+For TUI scenarios (approval dialog, working-directory enforcement, hook
+integration), spawn a tmux session and drive `gen` interactively:
 
 ```bash
 mkdir -p /tmp/perm_test/.gen
+cat > /tmp/perm_test/.gen/settings.local.json <<'EOF'
+{"permissions": {"allow": ["Bash(echo *)", "Bash(ls *)"]}}
+EOF
 
-# Test 1: Normal mode — confirmation dialog (y/n)
 tmux new-session -d -s t_perm -x 220 -y 60
 tmux send-keys -t t_perm 'cd /tmp/perm_test && gen' Enter
 sleep 2
-tmux send-keys -t t_perm 'create file hello.txt with content world' Enter
+tmux send-keys -t t_perm 'Run bash: echo hi && ls /tmp' Enter
 sleep 5
 tmux capture-pane -t t_perm -p
-# Expected: permission dialog shows tool name and input; press y to approve
-tmux send-keys -t t_perm 'y' Enter
-sleep 3
-cat /tmp/perm_test/hello.txt
-# Expected: "world"
+# Expected: runs without dialog (every subcommand matches an allow rule)
 
-# Test 2: Allow list — auto-approve (no prompt)
-tmux send-keys -t t_perm C-c
-cat > /tmp/perm_test/.gen/settings.json << 'EOF'
-{"permissions": {"allow": ["Write(/tmp/perm_test/*)"]}}
-EOF
-tmux send-keys -t t_perm 'cd /tmp/perm_test && gen' Enter
-sleep 2
-tmux send-keys -t t_perm 'create file auto.txt with content ok' Enter
+tmux send-keys -t t_perm 'Run bash: echo hi && cat /etc/hosts' Enter
 sleep 5
 tmux capture-pane -t t_perm -p
-# Expected: file created without any dialog
-
-# Test 3: Deny list — blocked
-tmux send-keys -t t_perm C-c
-cat > /tmp/perm_test/.gen/settings.json << 'EOF'
-{"permissions": {"deny": ["Bash(rm*)"]}}
-EOF
-tmux send-keys -t t_perm 'cd /tmp/perm_test && gen' Enter
-sleep 2
-tmux send-keys -t t_perm 'run: rm -f /tmp/perm_test/hello.txt' Enter
-sleep 5
-tmux capture-pane -t t_perm -p
-# Expected: Bash blocked by deny rule; inline error shown
-
-# Test 4: Normal mode — deny with n
-tmux send-keys -t t_perm C-c
-rm -f /tmp/perm_test/.gen/settings.json
-tmux send-keys -t t_perm 'cd /tmp/perm_test && gen' Enter
-sleep 2
-tmux send-keys -t t_perm 'run echo secret using bash' Enter
-sleep 3
-tmux send-keys -t t_perm 'n'
-sleep 2
-tmux capture-pane -t t_perm -p
-# Expected: tool denied; inline error in conversation
-
-# Test 5: Allow always with a
-tmux send-keys -t t_perm 'run echo test1 using bash' Enter
-sleep 3
-tmux send-keys -t t_perm 'a'
-sleep 3
-tmux send-keys -t t_perm 'run echo test2 using bash' Enter
-sleep 5
-tmux capture-pane -t t_perm -p
-# Expected: second Bash runs without dialog (allow-always applied)
-
-# Test 6: Working directory enforcement
-tmux send-keys -t t_perm 'create file /etc/forbidden.txt with content bad' Enter
-sleep 5
-tmux capture-pane -t t_perm -p
-# Expected: blocked — edits outside project root denied
+# Expected: approval dialog (cat /etc/hosts has no allow rule)
 
 tmux kill-session -t t_perm
 rm -rf /tmp/perm_test

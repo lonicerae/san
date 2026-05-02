@@ -13,6 +13,7 @@ import (
 	"github.com/genai-io/gen-code/internal/llm"
 	"github.com/genai-io/gen-code/internal/log"
 	"github.com/genai-io/gen-code/internal/mcp"
+	"github.com/genai-io/gen-code/internal/setting"
 	"github.com/genai-io/gen-code/internal/task"
 	"github.com/genai-io/gen-code/internal/tool"
 	"github.com/genai-io/gen-code/internal/tool/perm"
@@ -252,7 +253,7 @@ func (e *Executor) fireSubagentStart(req AgentRequest, agentHookID string) {
 	})
 }
 
-func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd string, onToolExec ...func(string, map[string]any)) (core.Agent, func(), error) {
+func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd string, onToolExec func(string, map[string]any), onEvent func(core.Event)) (core.Agent, func(), error) {
 	cleanup := func() {}
 
 	if len(rc.config.McpServers) > 0 && e.mcpRegistry != nil {
@@ -265,12 +266,13 @@ func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd strin
 		}
 	}
 
-	// Capabilities — only inject for subagents with corresponding tools
+	// Capabilities — only inject for subagents with corresponding tools.
+	// nil AllowTools means all tools are accessible.
 	var skillsPrompt, agentsPrompt string
-	if hasToolAccess(rc.config.Tools, "Skill") {
+	if rc.config.AllowTools == nil || rc.config.AllowTools.HasName("Skill") {
 		skillsPrompt = e.skillsPrompt
 	}
-	if hasToolAccess(rc.config.Tools, "Agent") {
+	if rc.config.AllowTools == nil || rc.config.AllowTools.HasName("Agent") {
 		agentsPrompt = e.agentsPrompt
 	}
 
@@ -289,8 +291,8 @@ func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd strin
 	})
 
 	// Tools — adapt legacy tool registry + MCP tools
-	toolSet := newAgentToolSet([]string(rc.config.Tools), []string(rc.config.DisallowedTools), e.mcpGetter)
-	schemas := filterSchemasForPermission(toolSet.Tools(), rc.permMode)
+	toolSet := newAgentToolSet(rc.config.AllowTools.Names(), rc.config.DenyTools.BareNames(), e.mcpGetter)
+	schemas := filterSchemasForPermission(toolSet.Tools(), rc.permMode, rc.config.AllowTools)
 	var ag core.Agent
 	tools := tool.AdaptToolRegistry(schemas, func() string { return agentCwd }, tool.WithMessagesGetterProvider(func() []core.Message {
 		if ag == nil {
@@ -308,12 +310,12 @@ func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd strin
 	}
 
 	var coreTools core.Tools = tools
-	if len(onToolExec) > 0 && onToolExec[0] != nil {
-		coreTools = &progressTools{inner: tools, onExec: onToolExec[0]}
+	if onToolExec != nil {
+		coreTools = &progressTools{inner: tools, onExec: onToolExec}
 	}
 
 	// Wrap tools with permission decorator
-	permFn := subagentPermissionFunc(rc.permMode)
+	permFn := subagentPermissionFunc(rc.permMode, rc.config.AllowTools, rc.config.DenyTools)
 	coreTools = tool.WithPermission(coreTools, permFn)
 
 	ag = core.NewAgent(core.Config{
@@ -323,7 +325,8 @@ func (e *Executor) buildAgent(ctx context.Context, rc *runConfig, agentCwd strin
 		AgentType: rc.config.Name,
 		CWD:       agentCwd,
 		MaxTurns:  rc.maxTurns,
-		OutboxBuf: 256,
+		OutboxBuf: -1,
+		OnEvent:   onEvent,
 	})
 
 	return ag, cleanup, nil
@@ -407,71 +410,87 @@ func shouldRetryWithParentModel(err error, modelID, parentModelID string) bool {
 	return strings.Contains(msg, "model_not_found") || strings.Contains(msg, "model not found") || strings.Contains(msg, "model_not_exist")
 }
 
-// agentPermission maps PermissionMode to a perm.Checker.
-func agentPermission(mode PermissionMode) perm.Checker {
-	switch mode {
+// modeChecker returns the perm.Checker for the mode. dontAsk falls back to
+// default since the headless coercion is automatic for subagents; auto is
+// aliased to acceptEdits until the safety classifier ships.
+func modeChecker(mode PermissionMode) perm.Checker {
+	switch NormalizePermissionMode(string(mode)) {
 	case PermissionExplore:
 		return perm.ReadOnly()
-	case PermissionEdit:
+	case PermissionAcceptEdits, PermissionAuto:
 		return perm.AcceptEdits()
-	case PermissionDefault:
+	case PermissionBypass:
 		return perm.PermitAll()
 	default:
-		return perm.PermitAll()
+		return perm.Default()
 	}
 }
 
-func subagentPermissionFunc(mode PermissionMode) perm.PermissionFunc {
-	checker := agentPermission(mode)
-	if checker == nil {
-		return nil
-	}
+// subagentPermissionFunc returns the subagent permission gate. The pipeline
+// matches docs/gen-permission.md: deny_tools, bypass-immune, allow_tools,
+// mode default, with Prompt collapsing to Deny because subagents cannot ask.
+func subagentPermissionFunc(mode PermissionMode, allowRules, denyRules ToolList) perm.PermissionFunc {
+	checker := modeChecker(mode)
+	display := displayPermissionMode(mode)
+
 	return func(_ context.Context, name string, input map[string]any) (bool, string) {
+		if denyRules.Matches(name, input) {
+			return false, fmt.Sprintf("tool %s is blocked by deny_tools", name)
+		}
+		if reason := setting.BypassImmuneReason(name, input); reason != "" {
+			return false, fmt.Sprintf("tool %s blocked: %s", name, reason)
+		}
+		if allowRules.Allows(name, input) {
+			return true, ""
+		}
+		// allow_tools mentions this tool but no pattern matched — the agent
+		// declared a constrained whitelist, so deny rather than fall through.
+		if allowRules.HasName(name) {
+			return false, fmt.Sprintf("tool %s call is outside the allow_tools constraint", name)
+		}
 		switch checker.Check(name, input) {
 		case perm.Permit:
 			return true, ""
 		case perm.Reject:
-			return false, fmt.Sprintf("tool %s is not permitted in %s mode", name, displayPermissionMode(mode))
-		case perm.Prompt:
-			return false, fmt.Sprintf("tool %s requires approval and is not available to subagents in %s mode", name, displayPermissionMode(mode))
+			return false, fmt.Sprintf("tool %s is denied in %s mode", name, display)
 		default:
-			return false, fmt.Sprintf("tool %s is not permitted in %s mode", name, displayPermissionMode(mode))
+			return false, fmt.Sprintf("tool %s would require approval; subagent in %s mode denies it", name, display)
 		}
 	}
 }
 
-func filterSchemasForPermission(schemas []core.ToolSchema, mode PermissionMode) []core.ToolSchema {
-	if mode != PermissionExplore && mode != PermissionEdit {
-		return schemas
-	}
+// filterSchemasForPermission narrows the LLM-visible tool set to what the
+// agent can actually use under its mode + allow_tools. UX hint only — the
+// permission gate is still authoritative. A non-nil allowTools acts as a
+// whitelist regardless of mode.
+func filterSchemasForPermission(schemas []core.ToolSchema, mode PermissionMode, allowTools ToolList) []core.ToolSchema {
+	mode = NormalizePermissionMode(string(mode))
+	whitelist := allowTools != nil
+
 	filtered := make([]core.ToolSchema, 0, len(schemas))
 	for _, schema := range schemas {
-		if perm.IsReadOnlyTool(schema.Name) || (mode == PermissionEdit && isEditToolSchema(schema.Name)) {
+		if whitelist {
+			if allowTools.HasName(schema.Name) {
+				filtered = append(filtered, schema)
+			}
+			continue
+		}
+		if modeAllowsSchema(mode, schema.Name) {
 			filtered = append(filtered, schema)
 		}
 	}
 	return filtered
 }
 
-func isEditToolSchema(name string) bool {
-	switch name {
-	case "Edit", "Write", "NotebookEdit":
-		return true
-	default:
-		return false
-	}
-}
-
-// hasToolAccess returns true if the tool list includes the given tool.
-// A nil list means all tools are accessible.
-func hasToolAccess(tools ToolList, name string) bool {
-	if tools == nil {
+func modeAllowsSchema(mode PermissionMode, name string) bool {
+	if perm.IsSafeTool(name) {
 		return true
 	}
-	for _, t := range tools {
-		if t == name {
-			return true
-		}
+	switch mode {
+	case PermissionBypass, PermissionAuto:
+		return true
+	case PermissionAcceptEdits:
+		return perm.IsEditTool(name)
 	}
 	return false
 }

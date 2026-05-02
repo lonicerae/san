@@ -28,6 +28,7 @@ type agent struct {
 	maxOutputRecovery int
 	inbox             chan Message
 	outbox            chan Event
+	onEvent           func(Event)
 
 	mu       sync.RWMutex
 	messages []Message // conversation history
@@ -462,6 +463,9 @@ func (a *agent) streamInfer(ctx context.Context) (*InferResponse, error) {
 // No-op when outbox is nil (subagent direct path).
 // Blocks if outbox is full (backpressure). Skips if outbox is closed or ctx is cancelled.
 func (a *agent) emit(ctx context.Context, event Event) {
+	if a.onEvent != nil {
+		a.onEvent(event)
+	}
 	if a.outbox == nil || a.closed.Load() {
 		return
 	}
@@ -475,6 +479,9 @@ func (a *agent) emit(ctx context.Context, event Event) {
 // Used for StopEvent — consumers rely on it for cleanup/session saving.
 // No-op when outbox is nil. Blocks up to 5 seconds; logs a warning if delivery fails.
 func (a *agent) emitFinal(event Event) {
+	if a.onEvent != nil {
+		a.onEvent(event)
+	}
 	if a.outbox == nil || a.closed.Load() {
 		return
 	}

@@ -9,8 +9,8 @@ import (
 )
 
 // WithPermission wraps core.Tools with permission checking.
-// Safe tools (perm.IsSafeTool) bypass the check automatically.
-// nil check returns inner unchanged (permit-all).
+// nil check returns inner unchanged (permit-all). The checker itself decides
+// whether safe tools are allowed so deny/ask rules still apply consistently.
 func WithPermission(inner core.Tools, check perm.PermissionFunc) core.Tools {
 	if check == nil {
 		return inner
@@ -48,10 +48,8 @@ func (pt *permissionTool) Description() string     { return pt.inner.Description
 func (pt *permissionTool) Schema() core.ToolSchema { return pt.inner.Schema() }
 
 func (pt *permissionTool) Execute(ctx context.Context, input map[string]any) (string, error) {
-	if !perm.IsSafeTool(pt.inner.Name()) {
-		if allow, reason := pt.check(ctx, pt.inner.Name(), input); !allow {
-			return "", fmt.Errorf("blocked: %s", reason)
-		}
+	if allow, reason := pt.check(ctx, pt.inner.Name(), input); !allow {
+		return "", fmt.Errorf("blocked: %s", reason)
 	}
 	return pt.inner.Execute(ctx, input)
 }

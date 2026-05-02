@@ -1,8 +1,10 @@
 package setting
 
 import (
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -15,6 +17,15 @@ var safeTools = map[string]bool{
 	"TaskCreate": true, "TaskGet": true, "TaskList": true, "TaskUpdate": true,
 	"AskUserQuestion": true,
 	"CronList":        true,
+}
+
+func isEditTool(name string) bool {
+	switch name {
+	case "Edit", "Write", "NotebookEdit":
+		return true
+	default:
+		return false
+	}
 }
 
 // PermissionBehavior represents the outcome of a permission check.
@@ -70,101 +81,68 @@ func decide(b PermissionBehavior, reason string) PermissionDecision {
 //
 // Decision pipeline (inspired by Claude Code's hasPermissionsToUseTool):
 //
-//  1. Deny rules + bypass-immune safety checks + ask rules (via checkHardBlocks)
-//     — deny rules cannot be bypassed; safety checks always prompt
-//  2. BypassPermissions mode → allow (everything except step 1)
-//  3. Session permissions (runtime overrides)
-//  4. Allow rules
-//  5. Default (safe tools → allow, others → ask)
-//  6. Mode transforms: DontAsk converts ask → deny
+//  1. Deny rules
+//  2. Bypass-immune safety checks
+//  3. BypassPermissions mode → allow (everything except steps 1-2)
+//  4. Session permissions (runtime overrides)
+//  5. Ask rules
+//  6. Allow rules
+//  7. Mode default
+//  8. Headless / DontAsk coercion: Ask → Deny
 
 // HasPermissionToUseTool is the central permission gate that determines
 // whether a tool invocation should be allowed, denied, or prompted.
 func (s *Settings) HasPermissionToUseTool(toolName string, args map[string]any, session *SessionPermissions) PermissionDecision {
 	rule := BuildRule(toolName, args)
 
-	// ── Step 1: Deny rules + bypass-immune safety checks ──
-	if reason := s.checkHardBlocks(toolName, args, rule, session); reason != "" {
-		if s.isDenyRule(reason) {
-			return decide(Deny, reason)
+	// ── Step 1: Deny rules ──
+	for _, pattern := range s.Permissions.Deny {
+		if MatchesToolPattern(toolName, args, rule, pattern) {
+			return decide(Deny, "deny rule: "+pattern)
 		}
-		return decide(Ask, reason)
 	}
 
-	// ── Step 2: BypassPermissions mode ──
+	// ── Step 2: Bypass-immune safety checks ──
+	if reason := s.bypassImmunePromptReason(toolName, args, session); reason != "" {
+		return coerceAsk(decide(Ask, reason), session)
+	}
+
+	// ── Step 3: BypassPermissions mode ──
 	if session != nil && session.Mode == ModeBypassPermissions {
 		return decide(Allow, "mode: bypass permissions")
 	}
 
-	// ── Step 3: Session permissions ──
+	// ── Step 4: Session permissions ──
 	if session != nil {
 		if session.IsToolAllowed(toolName) {
 			return decide(Allow, "session: allow all "+toolName)
 		}
-		for pattern := range session.AllowedPatterns {
-			if MatchesToolPattern(toolName, args, rule, pattern) {
-				return decide(Allow, "session pattern: "+pattern)
-			}
+		if pattern, ok := MatchAllowList(toolName, args, slices.Collect(maps.Keys(session.AllowedPatterns))); ok {
+			return decide(Allow, "session pattern: "+pattern)
 		}
 	}
 
-	// ── Step 4: Allow rules ──
-	for _, pattern := range s.Permissions.Allow {
+	// ── Step 5: Ask rules ──
+	for _, pattern := range s.Permissions.Ask {
 		if MatchesToolPattern(toolName, args, rule, pattern) {
-			return decide(Allow, "allow rule: "+pattern)
+			return coerceAsk(decide(Ask, "ask rule: "+pattern), session)
 		}
 	}
 
-	// Note: Ask rules are already checked in checkHardBlocks (Step 1).
-
-	// ── Step 5: Default ──
-	result := decide(Ask, "default: requires confirmation")
-	if safeTools[toolName] {
-		result = decide(Allow, "default: safe tool")
+	// ── Step 6: Allow rules ──
+	if pattern, ok := MatchAllowList(toolName, args, s.Permissions.Allow); ok {
+		return decide(Allow, "allow rule: "+pattern)
 	}
 
-	// ── Step 6: Mode transforms ──
-	if result.Behavior == Ask && session != nil && session.Mode == ModeDontAsk {
-		return decide(Deny, "mode: don't ask (auto-deny)")
-	}
-
-	return result
+	// ── Step 7/8: Mode default + headless coercion ──
+	return coerceAsk(modeDefaultDecision(toolName, session), session)
 }
 
-// checkHardBlocks checks deny rules, bypass-immune safety checks, working
-// directory constraints, and ask rules. Returns a reason string if the action
-// should be blocked/prompted, or empty string if none of these apply.
-// Used by both HasPermissionToUseTool and ResolveHookAllow.
-func (s *Settings) checkHardBlocks(toolName string, args map[string]any, rule string, session *SessionPermissions) string {
-	// Deny rules
-	for _, pattern := range s.Permissions.Deny {
-		if MatchesToolPattern(toolName, args, rule, pattern) {
-			return "deny rule: " + pattern
-		}
+func (s *Settings) bypassImmunePromptReason(toolName string, args map[string]any, session *SessionPermissions) string {
+	if reason := BypassImmuneReason(toolName, args); reason != "" {
+		return "bypass-immune: " + reason
 	}
 
-	// Bypass-immune: sensitive paths
-	if toolName == "Edit" || toolName == "Write" {
-		if fp, ok := args["file_path"].(string); ok {
-			if reason := isSensitivePath(fp); reason != "" {
-				return "bypass-immune: " + reason
-			}
-		}
-	}
-
-	// Bypass-immune: destructive/dangerous bash
-	if toolName == "Bash" {
-		if cmd, ok := args["command"].(string); ok {
-			if isDestructiveCommand(cmd) {
-				return "bypass-immune: destructive command"
-			}
-			if reason := checkBashSecurity(cmd); reason != "" {
-				return "bypass-immune: " + reason
-			}
-		}
-	}
-
-	// Working directory constraints
 	if session != nil && len(session.WorkingDirectories) > 0 {
 		if toolName == "Edit" || toolName == "Write" {
 			if fp, ok := args["file_path"].(string); ok {
@@ -174,20 +152,43 @@ func (s *Settings) checkHardBlocks(toolName string, args map[string]any, rule st
 			}
 		}
 	}
-
-	// Ask rules
-	for _, pattern := range s.Permissions.Ask {
-		if MatchesToolPattern(toolName, args, rule, pattern) {
-			return "ask rule: " + pattern
-		}
-	}
-
 	return ""
 }
 
-// isDenyRule returns true if the reason string indicates a deny rule (vs ask/bypass-immune).
-func (s *Settings) isDenyRule(reason string) bool {
-	return strings.HasPrefix(reason, "deny rule:")
+func modeDefaultDecision(toolName string, session *SessionPermissions) PermissionDecision {
+	if safeTools[toolName] {
+		return decide(Allow, "mode: safe tool")
+	}
+
+	mode := ModeNormal
+	if session != nil {
+		mode = session.Mode
+	}
+
+	switch mode {
+	case ModeAutoAccept:
+		if isEditTool(toolName) {
+			return decide(Allow, "mode: accept edits")
+		}
+		return decide(Ask, "mode: accept edits requires confirmation")
+	case ModeDontAsk:
+		return decide(Deny, "mode: don't ask (auto-deny)")
+	default:
+		return decide(Ask, "mode: default requires confirmation")
+	}
+}
+
+func coerceAsk(decision PermissionDecision, session *SessionPermissions) PermissionDecision {
+	if decision.Behavior != Ask || session == nil {
+		return decision
+	}
+	if session.Mode == ModeDontAsk {
+		return decide(Deny, "mode: don't ask (auto-deny): "+decision.Reason)
+	}
+	if session.ShouldAvoidPrompts {
+		return decide(Deny, "headless: "+decision.Reason)
+	}
+	return decision
 }
 
 // ResolveHookAllow checks if a hook's "allow" decision should be honored.
@@ -196,7 +197,20 @@ func (s *Settings) isDenyRule(reason string) bool {
 // deny rules > bypass-immune checks > ask rules > hook allow.
 func (s *Settings) ResolveHookAllow(toolName string, args map[string]any, session *SessionPermissions) bool {
 	rule := BuildRule(toolName, args)
-	return s.checkHardBlocks(toolName, args, rule, session) == ""
+	for _, pattern := range s.Permissions.Deny {
+		if MatchesToolPattern(toolName, args, rule, pattern) {
+			return false
+		}
+	}
+	if s.bypassImmunePromptReason(toolName, args, session) != "" {
+		return false
+	}
+	for _, pattern := range s.Permissions.Ask {
+		if MatchesToolPattern(toolName, args, rule, pattern) {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckPermission is a convenience wrapper returning just the behavior.
@@ -354,6 +368,61 @@ func meaningfulBashCommands(cmd string) []string {
 	return normalized
 }
 
+func bashRuleForms(cmd string) []string {
+	forms := make([]string, 0, 8)
+	seen := make(map[string]bool)
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		forms = append(forms, s)
+	}
+
+	for _, raw := range extractBashCommands(cmd) {
+		add(raw)
+	}
+	for _, normalized := range normalizedBashCommands(cmd) {
+		add(normalized)
+	}
+	return forms
+}
+
+func bashSubcommandRuleForms(cmd string) [][]string {
+	var parsed []parsedCommand
+	if file := parseBashAST(cmd); file != nil {
+		parsed = extractCommandsAST(file)
+	}
+
+	if len(parsed) > 0 {
+		result := make([][]string, 0, len(parsed))
+		for _, subCmd := range parsed {
+			forms := []string{subCmd.String()}
+			if normalized := normalizeParsedCommand(subCmd); normalized != "" && normalized != subCmd.String() {
+				forms = append(forms, normalized)
+			}
+			result = append(result, forms)
+		}
+		return result
+	}
+
+	rawCommands := extractBashCommands(cmd)
+	result := make([][]string, 0, len(rawCommands))
+	for _, raw := range rawCommands {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		forms := []string{raw}
+		if normalized := normalizeBashCommand(raw); normalized != "" && normalized != raw {
+			forms = append(forms, normalized)
+		}
+		result = append(result, forms)
+	}
+	return result
+}
+
 // extractBashCommands extracts individual commands from a chained bash command.
 // It splits on && and ; to get each command separately.
 func extractBashCommands(cmd string) []string {
@@ -373,7 +442,9 @@ func extractBashCommands(cmd string) []string {
 }
 
 // MatchesToolPattern reports whether a tool invocation matches a permission
-// pattern. Bash commands match if any extracted subcommand matches.
+// pattern. For Bash deny/ask checks, any matching subcommand is enough. Bash
+// allow checks must use matchAllowPatterns, which requires every subcommand to
+// be covered by the allow set.
 func MatchesToolPattern(toolName string, args map[string]any, rule, pattern string) bool {
 	if MatchRule(rule, pattern) {
 		return true
@@ -388,14 +459,92 @@ func MatchesToolPattern(toolName string, args map[string]any, rule, pattern stri
 		return false
 	}
 
-	for _, subCmd := range normalizedBashCommands(cmd) {
-		subRule := "Bash(" + subCmd + ")"
-		if MatchRule(subRule, pattern) {
+	for _, form := range bashRuleForms(cmd) {
+		if MatchRule("Bash("+form+")", pattern) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// MatchAllowList reports whether (toolName, args) matches the allow list.
+// For Bash the contract is stricter than MatchesToolPattern: every parsed
+// subcommand must independently be covered by at least one pattern. Returns
+// the first matching pattern (or "" when no match).
+//
+// Use this for allow-rule evaluation. Use MatchesToolPattern for deny / ask
+// where any-subcommand match is the right semantic.
+func MatchAllowList(toolName string, args map[string]any, patterns []string) (string, bool) {
+	if len(patterns) == 0 {
+		return "", false
+	}
+	if toolName != "Bash" {
+		rule := BuildRule(toolName, args)
+		for _, pattern := range patterns {
+			if MatchesToolPattern(toolName, args, rule, pattern) {
+				return pattern, true
+			}
+		}
+		return "", false
+	}
+
+	cmd, ok := args["command"].(string)
+	if !ok || strings.TrimSpace(cmd) == "" {
+		return "", false
+	}
+	subcommands := bashSubcommandRuleForms(cmd)
+	if len(subcommands) == 0 {
+		return "", false
+	}
+
+	var firstMatch string
+	for _, forms := range subcommands {
+		matched := ""
+		for _, pattern := range patterns {
+			for _, form := range forms {
+				if MatchRule("Bash("+form+")", pattern) {
+					matched = pattern
+					break
+				}
+			}
+			if matched != "" {
+				break
+			}
+		}
+		if matched == "" {
+			return "", false
+		}
+		if firstMatch == "" {
+			firstMatch = matched
+		}
+	}
+	return firstMatch, true
+}
+
+// BypassImmuneReason returns a non-empty reason if the call would hit a
+// bypass-immune safety check (sensitive file path, destructive bash command,
+// or suspicious bash). Used by the main-loop gate (checkHardBlocks) and by
+// the subagent gate, which collapses the resulting Ask into Deny.
+func BypassImmuneReason(toolName string, args map[string]any) string {
+	switch toolName {
+	case "Edit", "Write", "NotebookEdit":
+		if fp, ok := args["file_path"].(string); ok {
+			if reason := isSensitivePath(fp); reason != "" {
+				return reason
+			}
+		}
+	case "Bash":
+		if cmd, ok := args["command"].(string); ok {
+			if isDestructiveCommand(cmd) {
+				return "destructive command"
+			}
+			if reason := checkBashSecurity(cmd); reason != "" {
+				return reason
+			}
+		}
+	}
+	return ""
 }
 
 // MatchRule checks if a rule matches a pattern.

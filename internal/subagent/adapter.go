@@ -114,6 +114,6 @@ func (a *ExecutorAdapter) GetAgentConfig(agentType string) (tool.AgentConfigInfo
 		Color:          config.Color,
 		Model:          config.Model,
 		PermissionMode: string(config.PermissionMode),
-		Tools:          []string(config.Tools),
+		Tools:          config.AllowTools.DisplayNames(),
 	}, true
 }

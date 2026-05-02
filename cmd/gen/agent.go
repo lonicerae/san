@@ -9,12 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/genai-io/gen-code/internal/core"
-	"github.com/genai-io/gen-code/internal/core/system"
 	"github.com/genai-io/gen-code/internal/llm"
 	"github.com/genai-io/gen-code/internal/setting"
 	"github.com/genai-io/gen-code/internal/subagent"
-	"github.com/genai-io/gen-code/internal/tool"
 )
 
 var agentRunOpts struct {
@@ -100,54 +97,34 @@ func runHeadlessAgent() error {
 		modelID = agentRunOpts.model
 	}
 
-	// Initialize agent registry
+	// Initialize agent registry — loads built-ins and any user/project AGENT.md.
 	if err := subagent.Initialize(subagent.Options{CWD: cwd}); err != nil {
 		return fmt.Errorf("failed to initialize agent registry: %w", err)
 	}
-
-	// Get agent configuration
-	agentCfg, ok := subagent.Default().Get(agentRunOpts.agentType)
-	if !ok {
+	if _, ok := subagent.Default().Get(agentRunOpts.agentType); !ok {
 		return fmt.Errorf("unknown agent type: %s", agentRunOpts.agentType)
 	}
 
-	// Build tool set based on agent config
-	toolSet := &tool.Set{}
-	if agentCfg.Tools != nil {
-		toolSet.Allow = []string(agentCfg.Tools)
-	}
-
-	sys := system.Build(system.Config{
-		Cwd:   cwd,
-		IsGit: setting.IsGitRepo(cwd),
-	})
-
-	client := llm.NewClient(llmProvider, modelID, 16384)
-
-	schemas := toolSet.Tools()
-	tools := tool.AdaptToolRegistry(schemas, func() string { return cwd })
-
-	maxTurns := agentRunOpts.maxTurns
-	if maxTurns <= 0 {
-		maxTurns = 100
-	}
-
-	ag := core.NewAgent(core.Config{
-		LLM:       client,
-		System:    sys,
-		Tools:     tools,
-		CWD:       cwd,
-		MaxTurns:  maxTurns,
-		OutboxBuf: -1,
-	})
-
-	ag.Append(ctx, core.UserMessage(agentRunOpts.prompt, nil))
+	// Run through the full subagent pipeline so headless invocations get the
+	// same permission gate (deny_tools / bypass-immune / allow_tools / mode)
+	// as TUI-spawned subagents.
+	executor := subagent.NewExecutor(llmProvider, cwd, modelID, nil)
+	executor.SetContext("", "", setting.IsGitRepo(cwd))
 
 	fmt.Printf("Agent: %s\n", agentRunOpts.agentType)
 	fmt.Printf("Prompt: %s\n", agentRunOpts.prompt)
 	fmt.Println("---")
 
-	result, err := ag.ThinkAct(ctx)
+	req := subagent.AgentRequest{
+		Agent:    agentRunOpts.agentType,
+		Prompt:   agentRunOpts.prompt,
+		Model:    agentRunOpts.model,
+		MaxTurns: agentRunOpts.maxTurns,
+		OnProgress: func(msg string) {
+			fmt.Fprintln(os.Stderr, "·", msg)
+		},
+	}
+	result, err := executor.Run(ctx, req)
 	if err != nil {
 		return fmt.Errorf("agent failed: %w", err)
 	}
@@ -156,6 +133,9 @@ func runHeadlessAgent() error {
 		fmt.Println(result.Content)
 	}
 
-	fmt.Printf("\n---\nDone: %d turns, %d tool uses\n", result.Turns, result.ToolUses)
+	fmt.Printf("\n---\nDone: %d turns, %d tool uses (success=%t)\n", result.TurnCount, result.ToolUses, result.Success)
+	if result.Error != "" {
+		fmt.Printf("Error: %s\n", result.Error)
+	}
 	return nil
 }

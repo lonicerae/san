@@ -107,6 +107,10 @@ func newModel(opts setting.RunOptions) (*model, error) {
 
 func newBaseModel() model {
 	svc := newServices()
+	environment := newEnv(svc.LLM, appCwd, svc.Setting.IsGitRepo(appCwd))
+	if settings := svc.Setting.Snapshot(); settings != nil {
+		environment.ApplyDefaultPermissionMode(settings.Permissions.DefaultMode, appCwd, svc.Setting.AllowBypass())
+	}
 	return model{
 		userInput: input.New(appCwd, defaultWidth, commandSuggestionMatcher(svc.Command), input.SelectorDeps{
 			AgentRegistry:  &agentRegistryAdapter{svc.Subagent.Registry()},
@@ -121,7 +125,7 @@ func newBaseModel() model {
 		eventHub:    hub.New(),
 		mainEvents:  make(chan hub.Event, 64),
 		systemInput: trigger.New(),
-		env:         newEnv(svc.LLM, appCwd, svc.Setting.IsGitRepo(appCwd)),
+		env:         environment,
 		services:    svc,
 	}
 }

@@ -70,7 +70,7 @@ Available agent types for the Agent tool:
   Use with mode=explore for non-mutating codebase investigation, mode=edit for file edits, or default for full access
   Tools: *
 - code-reviewer: Reviews code changes without mutating the workspace
-  Tools: Read, Glob, Grep, WebFetch, WebSearch
+  Tools: Read, Glob, Grep, Bash(command=^git diff($|\s).*), WebFetch, WebSearch
 </available-agents>
 
 # Tool usage

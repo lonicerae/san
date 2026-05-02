@@ -63,7 +63,7 @@ Invoke with: Skill(skill="name", args="optional args")
 Available agent types for the Agent tool:
 
 - code-reviewer: Reviews code changes without mutating the workspace
-  Tools: Read, Glob, Grep, WebFetch, WebSearch
+  Tools: Read, Glob, Grep, Bash(command=^git diff($|\s).*), WebFetch, WebSearch
 </available-agents>
 
 # Tool usage

@@ -30,7 +30,7 @@ var safeWrapperCommands = map[string]bool{
 	"time":    true,
 	"nice":    true,
 	"nohup":   true,
-	"ionice":  true,
+	"stdbuf":  true,
 }
 
 // parseBashAST parses a bash command string into an AST.

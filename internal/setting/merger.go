@@ -27,9 +27,10 @@ func mergeSettings(base, overlay *Settings) *Settings {
 
 func mergePermissions(base, overlay PermissionSettings) PermissionSettings {
 	return PermissionSettings{
-		Allow: mergeStringSlices(base.Allow, overlay.Allow),
-		Deny:  mergeStringSlices(base.Deny, overlay.Deny),
-		Ask:   mergeStringSlices(base.Ask, overlay.Ask),
+		DefaultMode: coalesce(overlay.DefaultMode, base.DefaultMode),
+		Allow:       mergeStringSlices(base.Allow, overlay.Allow),
+		Deny:        mergeStringSlices(base.Deny, overlay.Deny),
+		Ask:         mergeStringSlices(base.Ask, overlay.Ask),
 	}
 }
 

@@ -48,7 +48,7 @@ func TestPrepareRunConfigRespectsOverrides(t *testing.T) {
 		Name:     "Scout",
 		Model:    "override-model",
 		MaxTurns: 120,
-		Mode:     string(PermissionEdit),
+		Mode:     string(PermissionAcceptEdits),
 	})
 	if err != nil {
 		t.Fatalf("prepareRunConfig() error: %v", err)
@@ -63,11 +63,11 @@ func TestPrepareRunConfigRespectsOverrides(t *testing.T) {
 	if rc.maxTurns != 120 {
 		t.Fatalf("expected max turns override, got %d", rc.maxTurns)
 	}
-	if rc.permMode != PermissionEdit {
+	if rc.permMode != PermissionAcceptEdits {
 		t.Fatalf("expected permission mode override, got %q", rc.permMode)
 	}
-	if !strings.Contains(rc.agentPrompt, "## Mode: Edit") {
-		t.Fatalf("expected edit mode prompt, got %q", rc.agentPrompt)
+	if !strings.Contains(rc.agentPrompt, "## Mode: Accept Edits") {
+		t.Fatalf("expected accept-edits mode prompt, got %q", rc.agentPrompt)
 	}
 }
 
@@ -191,8 +191,8 @@ func TestFormatToolProgressNamesGeneralAgentByMode(t *testing.T) {
 		want  string
 	}{
 		{agent: "general-purpose", mode: "explore", desc: "inspect repo", want: "Agent - Explorer: inspect repo"},
-		{agent: "general-purpose", mode: "edit", desc: "update files", want: "Agent - Editor: update files"},
-		{agent: "explorer", mode: "edit", desc: "update files", want: "Agent - Editor: update files"},
+		{agent: "general-purpose", mode: "acceptEdits", desc: "update files", want: "Agent - Editor: update files"},
+		{agent: "explorer", mode: "acceptEdits", desc: "update files", want: "Agent - Editor: update files"},
 	} {
 		got := formatToolProgress("Agent", map[string]any{
 			"subagent_type": tc.agent,
@@ -280,14 +280,102 @@ func TestExploreModeFiltersMutatingToolSchemas(t *testing.T) {
 		{Name: "WebSearch"},
 	}
 
-	got := filterSchemasForPermission(schemas, PermissionExplore)
-	want := []core.ToolSchema{{Name: "Read"}, {Name: "Grep"}, {Name: "WebSearch"}}
+	allowedBash := ToolList{{Name: "Bash", Pattern: "git diff*"}}
+
+	got := filterSchemasForPermission(schemas, PermissionExplore, allowedBash)
+	want := []core.ToolSchema{{Name: "Bash"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("filtered schemas = %+v, want %+v", got, want)
 	}
+
+	got = filterSchemasForPermission(schemas, PermissionExplore, nil)
+	want = []core.ToolSchema{{Name: "Read"}, {Name: "Grep"}, {Name: "WebSearch"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("filtered schemas without git diff = %+v, want %+v", got, want)
+	}
 }
 
-func TestEditModeFiltersApprovalOnlyToolSchemas(t *testing.T) {
+func TestExploreModeAllowsOnlyGitDiffBash(t *testing.T) {
+	check := subagentPermissionFunc(PermissionExplore, ToolList{{Name: "Bash", Pattern: "git diff*"}}, nil)
+	for _, command := range []string{
+		"git diff",
+		"git diff --stat",
+		"git diff --cached -- internal/subagent/executor.go",
+	} {
+		allow, reason := check(context.Background(), "Bash", map[string]any{"command": command})
+		if !allow {
+			t.Fatalf("Bash(%q) blocked: %s", command, reason)
+		}
+	}
+
+	// Cases that should be blocked: pattern mismatch, or bypass-immune
+	// destructive subcommand. The pattern Bash(git diff*) is greedy so
+	// "git diff > /tmp/foo" naturally matches — users wanting tighter
+	// scope should write a more specific pattern.
+	blocked := []string{
+		"git status",                          // pattern mismatch
+		"git diff && rm -rf /tmp/example",     // bypass-immune destructive
+		"git diff && git push --force origin", // bypass-immune destructive
+	}
+	for _, command := range blocked {
+		allow, _ := check(context.Background(), "Bash", map[string]any{"command": command})
+		if allow {
+			t.Fatalf("Bash(%q) allowed, want blocked", command)
+		}
+	}
+
+	allow, _ := subagentPermissionFunc(PermissionExplore, nil, nil)(context.Background(), "Bash", map[string]any{"command": "git diff"})
+	if allow {
+		t.Fatal("git diff allowed without agent permission")
+	}
+}
+
+func TestDefaultModeRestrictsConfiguredBash(t *testing.T) {
+	check := subagentPermissionFunc(PermissionDefault, ToolList{{Name: "Bash", Pattern: "git diff*"}}, nil)
+	allow, reason := check(context.Background(), "Bash", map[string]any{"command": "git diff --stat"})
+	if !allow {
+		t.Fatalf("configured Bash command blocked: %s", reason)
+	}
+
+	allow, _ = check(context.Background(), "Bash", map[string]any{"command": "git status"})
+	if allow {
+		t.Fatal("unconfigured Bash command allowed (allow_tools whitelist constraint)")
+	}
+
+	allow, reason = check(context.Background(), "Read", map[string]any{"file_path": "README.md"})
+	if !allow {
+		t.Fatalf("non-Bash default mode tool blocked: %s", reason)
+	}
+}
+
+func TestDenyToolRulesMatchPatterns(t *testing.T) {
+	check := subagentPermissionFunc(PermissionDefault, nil, ToolList{{Name: "Bash", Pattern: "git status"}})
+	allow, _ := check(context.Background(), "Bash", map[string]any{"command": "git status"})
+	if allow {
+		t.Fatal("denied Bash command allowed")
+	}
+
+	allow, reason := check(context.Background(), "Bash", map[string]any{"command": "git diff --stat"})
+	// Default mode + no allow_tools -> Bash would Prompt -> Deny in subagent.
+	if allow {
+		t.Fatalf("default-mode Bash unexpectedly allowed without allow_tools: %s", reason)
+	}
+}
+
+func TestExploreModeAllowsConfiguredBashPattern(t *testing.T) {
+	check := subagentPermissionFunc(PermissionExplore, ToolList{{Name: "Bash", Pattern: "git show*"}}, nil)
+	allow, reason := check(context.Background(), "Bash", map[string]any{"command": "git show --stat HEAD"})
+	if !allow {
+		t.Fatalf("configured bash command blocked: %s", reason)
+	}
+
+	allow, _ = check(context.Background(), "Bash", map[string]any{"command": "git diff --stat"})
+	if allow {
+		t.Fatal("unconfigured bash command allowed")
+	}
+}
+
+func TestAcceptEditsModeFiltersApprovalOnlyToolSchemas(t *testing.T) {
 	schemas := []core.ToolSchema{
 		{Name: "Read"},
 		{Name: "Edit"},
@@ -296,10 +384,31 @@ func TestEditModeFiltersApprovalOnlyToolSchemas(t *testing.T) {
 		{Name: "Agent"},
 	}
 
-	got := filterSchemasForPermission(schemas, PermissionEdit)
+	got := filterSchemasForPermission(schemas, PermissionAcceptEdits, nil)
 	want := []core.ToolSchema{{Name: "Read"}, {Name: "Edit"}, {Name: "Write"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("filtered schemas = %+v, want %+v", got, want)
+	}
+}
+
+func TestBypassModeAllowsEverything(t *testing.T) {
+	check := subagentPermissionFunc(PermissionBypass, nil, nil)
+	allow, _ := check(context.Background(), "Bash", map[string]any{"command": "git status"})
+	if !allow {
+		t.Fatal("bypass mode should allow Bash")
+	}
+	allow, _ = check(context.Background(), "Agent", map[string]any{})
+	if !allow {
+		t.Fatal("bypass mode should allow Agent")
+	}
+}
+
+func TestNormalizePermissionModeDefaultsEmpty(t *testing.T) {
+	if got := NormalizePermissionMode(""); got != PermissionDefault {
+		t.Fatalf("normalize(empty) = %q, want %q", got, PermissionDefault)
+	}
+	if got := NormalizePermissionMode("  explore  "); got != PermissionExplore {
+		t.Fatalf("normalize(\"  explore  \") = %q, want %q", got, PermissionExplore)
 	}
 }
 

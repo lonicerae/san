@@ -77,10 +77,10 @@ func (r *Registry) registerBuiltins() {
 		Description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.",
 		Color:       "green",
 		WhenToUse: `Use this when the task needs multiple searches, cross-file reasoning, implementation work, or another multi-step workflow.
-For non-mutating investigation, run this agent with mode=explore. For implementation work, run it with mode=edit or the default mode.`,
+For non-mutating investigation, run this agent with mode=explore. For implementation work, run it with mode=acceptEdits or the default mode.`,
 		Model:          "inherit",
 		PermissionMode: PermissionDefault,
-		Tools:          nil, // nil = all tools
+		AllowTools:     nil,
 		MaxTurns:       100,
 		Source:         "built-in",
 	}
@@ -92,13 +92,14 @@ For non-mutating investigation, run this agent with mode=explore. For implementa
 		Color:       "blue",
 		WhenToUse: `Use this after implementing a feature or making changes to clean up the code.
 Focuses on recently modified code unless instructed otherwise.
-Good for reducing complexity, removing duplication, improving naming, and tightening logic.`,
+Good for reducing complexity, removing duplication, improving naming, and tightening logic.
+Use it to enforce naming conventions and replace hacks with clear, maintainable, extensible implementations.`,
 		Model:          "inherit",
-		PermissionMode: PermissionEdit,
-		Tools:          nil, // all tools
-		DisallowedTools: ToolList{"Agent", "SendMessage",
+		PermissionMode: PermissionAcceptEdits,
+		AllowTools:     nil,
+		DenyTools: ToolNames("Agent", "SendMessage",
 			"EnterWorktree", "ExitWorktree",
-			"CronCreate", "CronDelete", "CronList"},
+			"CronCreate", "CronDelete", "CronList"),
 		MaxTurns: 100,
 		Source:   "built-in",
 	}
@@ -113,9 +114,19 @@ Good for catching issues you might have missed — security vulnerabilities, edg
 Returns a structured review with findings and recommendations.`,
 		Model:          "inherit",
 		PermissionMode: PermissionExplore,
-		Tools:          ToolList{"Read", "Glob", "Grep", "WebFetch", "WebSearch"},
-		MaxTurns:       100,
-		Source:         "built-in",
+		AllowTools: ToolList{
+			{Name: "Read"},
+			{Name: "Glob"},
+			{Name: "Grep"},
+			{Name: "Bash", Pattern: "git diff*"},
+			{Name: "Bash", Pattern: "git log*"},
+			{Name: "Bash", Pattern: "git show*"},
+			{Name: "Bash", Pattern: "git status*"},
+			{Name: "WebFetch"},
+			{Name: "WebSearch"},
+		},
+		MaxTurns: 100,
+		Source:   "built-in",
 	}
 }
 
@@ -217,8 +228,8 @@ func (r *Registry) GetAgentsSection() string {
 			continue
 		}
 		toolsDesc := "*"
-		if config.Tools != nil {
-			toolsDesc = strings.Join([]string(config.Tools), ", ")
+		if config.AllowTools != nil {
+			toolsDesc = strings.Join(config.AllowTools.DisplayNames(), ", ")
 		}
 		entries = append(entries, entry{
 			name:      config.Name,

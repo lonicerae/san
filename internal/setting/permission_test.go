@@ -107,6 +107,7 @@ func TestCheckPermission(t *testing.T) {
 	settings := &Settings{
 		Permissions: PermissionSettings{
 			Allow: []string{
+				"Bash(cd:*)",
 				"Bash(git:*)",
 				"Bash(npm:*)",
 				"Read(**/*.go)",
@@ -137,7 +138,7 @@ func TestCheckPermission(t *testing.T) {
 			Allow,
 		},
 		{
-			"git subcommand allowed after cd",
+			"git subcommand allowed after cd when both subcommands are allowed",
 			"Bash",
 			map[string]any{"command": "cd /path/to/repo && git status"},
 			nil,
@@ -218,6 +219,36 @@ func TestCheckPermission(t *testing.T) {
 				t.Errorf("CheckPermission(%q, %v) = %v, want %v", tt.toolName, tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBashAllowRulesRequireEverySubcommand(t *testing.T) {
+	settings := &Settings{
+		Permissions: PermissionSettings{
+			Allow: []string{"Bash(git:*)"},
+		},
+	}
+
+	got := settings.CheckPermission("Bash", map[string]any{
+		"command": "git status && git log --oneline",
+	}, nil)
+	if got != Allow {
+		t.Fatalf("two covered git commands = %v, want Allow", got)
+	}
+
+	got = settings.CheckPermission("Bash", map[string]any{
+		"command": "git status && npm test",
+	}, nil)
+	if got != Ask {
+		t.Fatalf("partially covered compound command = %v, want Ask", got)
+	}
+
+	settings.Permissions.Allow = append(settings.Permissions.Allow, "Bash(npm:*)")
+	got = settings.CheckPermission("Bash", map[string]any{
+		"command": "git status && npm test",
+	}, nil)
+	if got != Allow {
+		t.Fatalf("fully covered compound command = %v, want Allow", got)
 	}
 }
 
@@ -564,9 +595,9 @@ func TestCheckPermissionWithReason(t *testing.T) {
 			Allow, "allow rule: Bash(git:*)",
 		},
 		{
-			"allow rule includes chained bash subcommand pattern",
+			"allow rule does not cover every chained bash subcommand",
 			"Bash", map[string]any{"command": "cd /repo && git describe --tags --abbrev=0"},
-			Allow, "allow rule: Bash(git:*)",
+			Ask, "mode: default requires confirmation",
 		},
 		{
 			"sensitive path has reason",
@@ -740,6 +771,41 @@ func TestDontAskMode(t *testing.T) {
 				t.Errorf("CheckPermission(%q) = %v, want %v", tt.toolName, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAcceptEditsModeAllowsEditsButPromptsBash(t *testing.T) {
+	settings := &Settings{}
+	session := &SessionPermissions{
+		Mode:            ModeAutoAccept,
+		AllowedTools:    make(map[string]bool),
+		AllowedPatterns: make(map[string]bool),
+	}
+
+	if got := settings.CheckPermission("Edit", map[string]any{"file_path": "/repo/main.go"}, session); got != Allow {
+		t.Fatalf("acceptEdits Edit = %v, want Allow", got)
+	}
+	if got := settings.CheckPermission("Bash", map[string]any{"command": "git status"}, session); got != Ask {
+		t.Fatalf("acceptEdits Bash = %v, want Ask", got)
+	}
+}
+
+func TestHeadlessCoercesAskToDeny(t *testing.T) {
+	settings := &Settings{}
+	session := &SessionPermissions{
+		ShouldAvoidPrompts: true,
+		AllowedTools:       make(map[string]bool),
+		AllowedPatterns:    make(map[string]bool),
+	}
+
+	got := settings.CheckPermission("Bash", map[string]any{"command": "git status"}, session)
+	if got != Deny {
+		t.Fatalf("headless Bash = %v, want Deny", got)
+	}
+
+	got = settings.CheckPermission("Read", map[string]any{"file_path": "/repo/main.go"}, session)
+	if got != Allow {
+		t.Fatalf("headless Read = %v, want Allow", got)
 	}
 }
 

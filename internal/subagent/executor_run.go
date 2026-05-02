@@ -3,7 +3,6 @@ package subagent
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/genai-io/gen-code/internal/core"
@@ -18,8 +17,9 @@ type preparedRun struct {
 	cwd              string
 	startedAt        time.Time
 	hookID           string
-	mu               sync.Mutex
 	progress         []string
+	inputTokens      int
+	outputTokens     int
 	cleanupWorkspace func()
 }
 
@@ -30,20 +30,21 @@ func (r *preparedRun) close() {
 }
 
 func (r *preparedRun) sendProgress(msg string) {
-	r.mu.Lock()
 	r.progress = append(r.progress, msg)
-	cb := r.req.OnProgress
-	r.mu.Unlock()
-
-	if cb != nil {
-		cb(msg)
+	if r.req.OnProgress != nil {
+		r.req.OnProgress(msg)
 	}
 }
 
-func (r *preparedRun) progressSnapshot() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.progress...)
+func (r *preparedRun) recordUsage(resp *core.InferResponse) {
+	if r.req.OnProgress == nil || resp == nil {
+		return
+	}
+	r.inputTokens += resp.TokensIn
+	r.outputTokens += resp.TokensOut
+	if r.inputTokens > 0 || r.outputTokens > 0 {
+		r.sendProgress(formatUsageProgress(r.inputTokens, r.outputTokens))
+	}
 }
 
 func (e *Executor) prepareRun(req AgentRequest) (*preparedRun, error) {
@@ -98,14 +99,15 @@ func (e *Executor) executePreparedRun(ctx context.Context, run *preparedRun) (*c
 			run.sendProgress(msg)
 		}
 	}
-	ag, cleanupAgent, err := e.buildAgent(ctx, run.cfg, run.cwd, onToolExec)
+	ag, cleanupAgent, err := e.buildAgent(ctx, run.cfg, run.cwd, onToolExec, func(ev core.Event) {
+		if resp, ok := ev.Response(); ok && ev.Type == core.PostInfer {
+			run.recordUsage(resp)
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
 	defer cleanupAgent()
-
-	stopProgress := run.watchAgentProgress(ctx, ag.Outbox())
-	defer stopProgress()
 
 	if err := e.loadConversation(ag, ctx, run.req); err != nil {
 		return nil, err
@@ -123,60 +125,6 @@ func (e *Executor) executePreparedRun(ctx context.Context, run *preparedRun) (*c
 	}
 
 	return result, nil
-}
-
-func (r *preparedRun) watchAgentProgress(ctx context.Context, outbox <-chan core.Event) func() {
-	if r.req.OnProgress == nil || outbox == nil {
-		return func() {}
-	}
-
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		var inputTokens, outputTokens int
-		handle := func(ev core.Event) {
-			if ev.Type != core.PostInfer {
-				return
-			}
-			resp, ok := ev.Response()
-			if !ok || resp == nil {
-				return
-			}
-			inputTokens += resp.TokensIn
-			outputTokens += resp.TokensOut
-			if inputTokens > 0 || outputTokens > 0 {
-				r.sendProgress(formatUsageProgress(inputTokens, outputTokens))
-			}
-		}
-		drain := func() {
-			for {
-				select {
-				case ev := <-outbox:
-					handle(ev)
-				default:
-					return
-				}
-			}
-		}
-		for {
-			select {
-			case ev := <-outbox:
-				handle(ev)
-			case <-done:
-				drain()
-				return
-			case <-ctx.Done():
-				drain()
-				return
-			}
-		}
-	}()
-
-	return func() {
-		close(done)
-		<-stopped
-	}
 }
 
 func formatUsageProgress(inputTokens, outputTokens int) string {
@@ -222,7 +170,7 @@ func (e *Executor) buildAgentResult(run *preparedRun, result *core.Result) *Agen
 		ToolUses:       result.ToolUses,
 		TokenUsage:     llm.TokenUsage{InputTokens: result.TokensIn, OutputTokens: result.TokensOut, TotalTokens: result.TokensIn + result.TokensOut},
 		Duration:       time.Since(run.startedAt),
-		Progress:       run.progressSnapshot(),
+		Progress:       append([]string(nil), run.progress...),
 		Error:          errMsg,
 	}
 }
@@ -242,7 +190,7 @@ func (e *Executor) buildCancelledAgentResult(run *preparedRun, result *core.Resu
 		ToolUses:   result.ToolUses,
 		TokenUsage: llm.TokenUsage{InputTokens: result.TokensIn, OutputTokens: result.TokensOut, TotalTokens: result.TokensIn + result.TokensOut},
 		Duration:   time.Since(run.startedAt),
-		Progress:   run.progressSnapshot(),
+		Progress:   append([]string(nil), run.progress...),
 		Error:      "agent cancelled",
 	}
 }

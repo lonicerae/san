@@ -151,6 +151,8 @@ func parseAgentFile(filePath string) (*AgentConfig, error) {
 		return nil, err
 	}
 
+	config.PermissionMode = NormalizePermissionMode(string(config.PermissionMode))
+
 	if config.Name == "" {
 		config.Name = strings.TrimSuffix(filepath.Base(filePath), ".md")
 	}

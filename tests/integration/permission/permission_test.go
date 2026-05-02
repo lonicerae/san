@@ -78,8 +78,6 @@ func TestPermission_ReadOnly_AllowsRead(t *testing.T) {
 }
 
 func TestPermission_DenyAll_BlocksNonSafeTools(t *testing.T) {
-	// DenyAll blocks non-safe tools. Safe tools (Read, Glob, etc.) bypass
-	// permission checks in the decorator — this is by design.
 	testutil.RegisterFakeTool(t, "Bash", "should not execute")
 
 	ag, _ := testutil.NewTestAgentWithPermission(t, perm.AsPermissionFunc(perm.DenyAll()),
@@ -104,8 +102,7 @@ func TestPermission_DenyAll_BlocksNonSafeTools(t *testing.T) {
 	}
 }
 
-func TestPermission_SafeToolBypassesPermission(t *testing.T) {
-	// Safe tools (Read, Glob, etc.) bypass permission checks even with DenyAll.
+func TestPermission_SafeToolGoesThroughPermission(t *testing.T) {
 	testutil.RegisterFakeTool(t, "Read", "file contents")
 
 	ag, _ := testutil.NewTestAgentWithPermission(t, perm.AsPermissionFunc(perm.DenyAll()),
@@ -118,9 +115,14 @@ func TestPermission_SafeToolBypassesPermission(t *testing.T) {
 		t.Fatalf("RunAgent() error: %v", err)
 	}
 
+	hasError := false
 	for _, m := range result.Messages {
 		if m.ToolResult != nil && m.ToolResult.IsError {
-			t.Errorf("safe tool Read should bypass DenyAll: %s", m.ToolResult.Content)
+			hasError = true
+			break
 		}
+	}
+	if !hasError {
+		t.Error("expected safe tool Read to be denied by DenyAll")
 	}
 }

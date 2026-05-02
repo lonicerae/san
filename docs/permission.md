@@ -1,32 +1,56 @@
 # Permission
 
-Permission is a tool-execution concern. All permission types, decisions, and enforcement
-live under `internal/tool/`.
+Permission is a tool-execution concern. The user-facing spec lives in
+[`gen-permission.md`](gen-permission.md); this doc walks the implementation.
+
+The same pipeline runs in the main loop and in subagents. The only difference
+is the headless-coercion step at the end: subagents (and `dontAsk` mode)
+collapse `Ask → Deny` automatically.
 
 ## Package Layout
 
 ```
 internal/tool/
 │
-├── perm/                        ← consolidated permission package
-│   ├── decision.go                 Decision, Checker, built-in checkers, AsPermissionFunc
-│   ├── safetool.go                 IsSafeTool, IsReadOnlyTool
+├── perm/                        ← permission primitives (lowest layer)
+│   ├── decision.go                 Decision enum, Checker interface, built-in
+│   │                               checkers (Default/AcceptEdits/ReadOnly/PermitAll/
+│   │                               DenyAll), IsSafeTool, IsReadOnlyTool, IsEditTool,
+│   │                               PermissionFunc, AsPermissionFunc
 │   ├── types.go                    PermissionRequest, DiffMetadata, BashMetadata, ...
 │   └── diff.go                     GenerateDiff, GeneratePreview
 │
-├── permission.go                ← PermissionFunc, WithPermission decorator (package tool)
+├── permission.go                ← WithPermission decorator (wraps core.Tools
+│                                  with a PermissionFunc; bypasses for IsSafeTool)
 │
 ├── adapter.go                      AdaptToolRegistry, toolAdapter
 ├── set.go                          Set (schema resolution: Allow/Disallow)
 ├── types.go                        Tool, PermissionAwareTool, InteractiveTool
 ├── call.go                         PrepareToolCall
 └── ...
+
+internal/setting/
+└── permission.go                ← unified gate (Settings.HasPermissionToUseTool):
+                                   the 8-step pipeline used by main loop + subagent.
+                                   Also exports MatchAllowList (per-subcommand allow
+                                   for Bash) and BypassImmuneReason (sensitive paths
+                                   + destructive bash, used by both gates).
+
+internal/subagent/
+├── match.go                     ← ToolList.Matches (deny/ask: any-subcommand)
+│                                  ToolList.Allows  (allow: every-subcommand,
+│                                                    delegates to setting.MatchAllowList)
+└── executor.go                  ← subagentPermissionFunc — runs steps 1-4 of
+                                   the unified pipeline plus Ask→Deny coercion.
 ```
 
-- `tool/perm/` — all permission primitives: decision types, checkers, safe-tool lists,
-  approval-dialog metadata, diff computation.
-- `tool/permission.go` — `WithPermission` decorator that wires a `PermissionFunc`
-  into `core.Tools`.
+The `tool/perm` package is dependency-free for the rest of the codebase: it
+defines the primitives (`Decision`, `Checker`, mode-aligned checkers,
+`PermissionFunc`). The `setting` package owns the actual pipeline that
+combines those primitives with allow / deny / ask rules. The `subagent`
+package threads the same primitives + bypass-immune helper into a
+narrower per-agent gate that respects `allow_tools` / `deny_tools` from
+the agent's frontmatter.
 
 ## Decision Pipeline
 

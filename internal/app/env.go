@@ -93,12 +93,10 @@ func (m *env) ResetSessionPermissions() {
 }
 
 func (m *env) ApplyAutoAcceptPermissions(cwd string) {
+	m.SessionPermissions.Mode = setting.ModeAutoAccept
 	m.SessionPermissions.AllowAllEdits = true
 	m.SessionPermissions.AllowAllWrites = true
 	m.SessionPermissions.AddWorkingDirectory(cwd)
-	for _, pattern := range setting.CommonAllowPatterns {
-		m.SessionPermissions.AllowPattern(pattern)
-	}
 }
 
 func (m *env) ApplyBypassPermissions() {
@@ -146,6 +144,15 @@ func (m *env) ApplyModePermissions(cwd string) {
 	if m.OperationMode == setting.ModeBypassPermissions {
 		m.ApplyBypassPermissions()
 	}
+}
+
+func (m *env) ApplyDefaultPermissionMode(mode string, cwd string, allowBypass bool) {
+	opMode := setting.OperationModeFromString(mode)
+	if opMode == setting.ModeBypassPermissions && !allowBypass {
+		opMode = setting.ModeNormal
+	}
+	m.OperationMode = opMode
+	m.ApplyModePermissions(cwd)
 }
 
 func (m *env) ClearCachedInstructions() {

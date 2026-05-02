@@ -37,7 +37,7 @@ func testScenarios() []scenario {
 				UserInstructions:    "Always use tabs for indentation.\nPrefer short variable names.",
 				ProjectInstructions: "This is a Go project using Bubble Tea.\nRun tests with: go test ./...",
 				Skills:              "<available-skills>\nUse the Skill tool to invoke these capabilities:\n\n- git: Git workflow automation\n- review: Review a pull request\n- init: Initialize a new CLAUDE.md file\n\nInvoke with: Skill(skill=\"name\", args=\"optional args\")\n</available-skills>",
-				Agents:              "<available-agents>\nAvailable agent types for the Agent tool:\n\n- general-purpose: General multi-step agent\n  Use with mode=explore for non-mutating codebase investigation, mode=edit for file edits, or default for full access\n  Tools: *\n- code-reviewer: Reviews code changes without mutating the workspace\n  Tools: Read, Glob, Grep, WebFetch, WebSearch\n</available-agents>",
+				Agents:              "<available-agents>\nAvailable agent types for the Agent tool:\n\n- general-purpose: General multi-step agent\n  Use with mode=explore for non-mutating codebase investigation, mode=edit for file edits, or default for full access\n  Tools: *\n- code-reviewer: Reviews code changes without mutating the workspace\n  Tools: Read, Glob, Grep, Bash(command=^git diff($|\\s).*), WebFetch, WebSearch\n</available-agents>",
 			},
 		},
 		{
@@ -79,7 +79,7 @@ func testScenarios() []scenario {
 				UserInstructions:    "Short variable names.",
 				ProjectInstructions: "Go project.",
 				Skills:              "<available-skills>\nUse the Skill tool to invoke these capabilities:\n\n- git: Git workflow automation\n\nInvoke with: Skill(skill=\"name\", args=\"optional args\")\n</available-skills>",
-				Agents:              "<available-agents>\nAvailable agent types for the Agent tool:\n\n- code-reviewer: Reviews code changes without mutating the workspace\n  Tools: Read, Glob, Grep, WebFetch, WebSearch\n</available-agents>",
+				Agents:              "<available-agents>\nAvailable agent types for the Agent tool:\n\n- code-reviewer: Reviews code changes without mutating the workspace\n  Tools: Read, Glob, Grep, Bash(command=^git diff($|\\s).*), WebFetch, WebSearch\n</available-agents>",
 				Extra: []ExtraLayer{
 					{Name: "agent-identity", Content: "## Agent Type: general-purpose\nGeneral-purpose agent for researching complex questions and executing multi-step tasks.\n\n## Mode: Edit\nYou may edit files when needed. Other operations follow the normal permission flow.\n\n## Guidelines\n- Focus on completing your assigned task efficiently\n- Return a clear summary when your task is complete\n- If you encounter errors, report them clearly\n"},
 				},

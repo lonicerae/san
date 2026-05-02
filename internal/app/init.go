@@ -154,8 +154,8 @@ func (a *agentRegistryAdapter) ListConfigs() []input.AgentConfigInfo {
 	out := make([]input.AgentConfigInfo, len(configs))
 	for i, cfg := range configs {
 		var tools []string
-		if cfg.Tools != nil {
-			tools = []string(cfg.Tools)
+		if cfg.AllowTools != nil {
+			tools = cfg.AllowTools.DisplayNames()
 		}
 		out[i] = input.AgentConfigInfo{
 			Name:           cfg.Name,

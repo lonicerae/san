@@ -102,6 +102,8 @@ type Config struct {
 	MaxOutputRecovery int // max retries on truncated output, 0 = use default (3)
 	InboxBuf          int // inbox channel buffer size, default 16
 	OutboxBuf         int // outbox channel buffer size, default 64; -1 = no outbox (subagent path)
+	// OnEvent observes lifecycle events synchronously, even when OutboxBuf is -1.
+	OnEvent func(Event)
 }
 
 // NewAgent creates an agent from config.
@@ -144,6 +146,7 @@ func NewAgent(cfg Config) Agent {
 		maxOutputRecovery: cfg.MaxOutputRecovery,
 		inbox:             make(chan Message, cfg.InboxBuf),
 		outbox:            outbox,
+		onEvent:           cfg.OnEvent,
 	}
 }
 
