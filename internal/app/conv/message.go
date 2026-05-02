@@ -169,7 +169,7 @@ func RenderOperationModeIndicator(mode OperationMode) string {
 		label = " accept edits on"
 		color = kit.CurrentTheme.Success
 	case ModeBypassPermissions:
-		icon = "⏩"
+		icon = "⏵⏵"
 		label = " bypass permissions on"
 		color = kit.CurrentTheme.Error
 	default:
@@ -177,7 +177,7 @@ func RenderOperationModeIndicator(mode OperationMode) string {
 	}
 
 	style := lipgloss.NewStyle().Foreground(color)
-	hint := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render("  shift+tab to toggle")
+	hint := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(" (shift+tab to cycle)")
 	return "  " + style.Render(icon+label) + hint
 }
 
