@@ -149,7 +149,7 @@ commands/*.md      # Slash commands
 
 </details>
 
-## Benchmark: GenCode vs Claude Code
+## Benchmark: Gen Code vs Claude Code
 
 Compared with [Claude Code](https://claude.ai/code) v2.1.112 on Apple Silicon, same model (`claude-sonnet-4-6`):
 
