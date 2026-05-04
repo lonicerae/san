@@ -21,11 +21,11 @@ Gen Code is a terminal coding assistant with interchangeable LLM providers, assi
 
 ### Extensibility
 
-- **Claude Code compatible** — Existing `~/.claude/`, `.claude/`, plugin marketplaces, and MCP server definitions integrate without modification.
-- **Skills** — Three-state lifecycle (active / enabled / disabled), per user or per project, managed via `/skills`.
-- **Subagents** — Per-agent permission modes (`explore` / `edit` / `default`), tool whitelists, and optional git-worktree sandboxing. Managed via `/agents` and the `Agent` tool.
-- **Lifecycle hooks** — Shell, LLM, agent, and HTTP backends across the full Claude Code event set.
-- **Project instructions** — `GEN.md` or `CLAUDE.md` auto-loaded into the system prompt.
+- **Claude Code compatible** — `~/.claude/`, `.claude/`, plugin marketplaces, and MCP servers integrate without modification.
+- **Skills** — Active / enabled / disabled lifecycle, per user or project; managed via `/skills`.
+- **Subagents** — Permission modes (explore / edit / default), tool whitelists, optional worktree isolation; managed via `/agents`.
+- **Lifecycle hooks** — Shell, LLM, agent, and HTTP backends.
+- **Project instructions** — `GEN.md` or `CLAUDE.md` auto-loaded.
 
 ### Engineering
 
