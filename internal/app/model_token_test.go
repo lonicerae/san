@@ -94,42 +94,20 @@ func TestResetContextDisplayPreservesTurnTotals(t *testing.T) {
 	}
 }
 
-func TestHandleAgentMessageRemovesInjectedQueuedInput(t *testing.T) {
+// HandleAgentMessage observes the agent's MessageEvent echoes only — every
+// path that hands a user message to the agent (idle submit, drainTurnQueues,
+// cron prompt, async hook) appends to m.conv at the call site. The echo must
+// be a strict no-op or the conversation double-displays.
+func TestHandleAgentMessageIsNoOpForUserEcho(t *testing.T) {
 	m := &model{
 		userInput: input.Model{Queue: input.NewQueue()},
 		conv:      conv.NewModel(80),
 		services:  services{Tracker: tracker.NewStore()},
 	}
-	m.userInput.Queue.Enqueue("queued message", nil)
-	m.userInput.Queue.MarkSentToInbox(0)
 
-	_ = m.HandleAgentMessage(core.UserMessage("queued message", nil))
+	_ = m.HandleAgentMessage(core.UserMessage("anything", nil))
 
-	if m.userInput.Queue.Len() != 0 {
-		t.Fatalf("queue len = %d, want 0", m.userInput.Queue.Len())
-	}
-	if len(m.conv.Messages) != 1 {
-		t.Fatalf("conversation messages = %d, want 1", len(m.conv.Messages))
-	}
-	if got := m.conv.Messages[0].Content; got != "queued message" {
-		t.Fatalf("message content = %q, want queued message", got)
-	}
-}
-
-func TestDrainTurnQueuesWaitsForSentQueuedInputInjection(t *testing.T) {
-	m := &model{userInput: input.Model{Queue: input.NewQueue()}}
-	m.userInput.Queue.Enqueue("already sent", nil)
-	m.userInput.Queue.MarkSentToInbox(0)
-
-	cmd, found := m.drainTurnQueues()
-
-	if !found {
-		t.Fatal("expected waiting queued input to hold the turn boundary")
-	}
-	if cmd != nil {
-		t.Fatalf("cmd = %#v, want nil", cmd)
-	}
-	if m.userInput.Queue.Len() != 1 {
-		t.Fatalf("queue len = %d, want waiting item retained", m.userInput.Queue.Len())
+	if len(m.conv.Messages) != 0 {
+		t.Fatalf("conv messages = %d, want 0 (echo must not append)", len(m.conv.Messages))
 	}
 }

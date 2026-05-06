@@ -64,7 +64,6 @@ type OperationModeParams struct {
 	ThinkingEffort   string
 	ShowThinking     bool
 	QueueCount       int
-	WaitingCount     int
 }
 
 // RenderModeStatus renders the combined mode status line.
@@ -83,9 +82,6 @@ func RenderModeStatus(params OperationModeParams) string {
 
 	if queueBadge := renderQueueBadge(params.QueueCount); queueBadge != "" {
 		leftParts = append(leftParts, queueBadge)
-	}
-	if waitingBadge := renderWaitingBadge(params.WaitingCount); waitingBadge != "" {
-		leftParts = append(leftParts, waitingBadge)
 	}
 
 	left := strings.Join(leftParts, "  ")
@@ -577,7 +573,6 @@ func stripMarkdownHeading(line string) string {
 type QueuePreviewItem struct {
 	Content   string
 	HasImages bool
-	Waiting   bool
 }
 
 var (
@@ -588,21 +583,13 @@ var (
 	queueContentStyle = lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.TextDim)
 
+	queueSelectedContentStyle = queueContentStyle.Foreground(kit.CurrentTheme.TextBright)
+
 	queueSelectedBadgeStyle = lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.TextBright).
-				Background(kit.CurrentTheme.Primary).
 				Bold(true)
 
-	queueSelectedContentStyle = lipgloss.NewStyle().
-					Foreground(kit.CurrentTheme.TextBright).
-					Background(kit.CurrentTheme.Primary).
-					Bold(true)
-
 	queueOverflowStyle = lipgloss.NewStyle().
-				Foreground(kit.CurrentTheme.Muted).
-				Italic(true)
-
-	queueWaitingStyle = lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.Muted).
 				Italic(true)
 )
@@ -662,13 +649,6 @@ func renderQueueBadge(count int) string {
 		return ""
 	}
 	return queueBadgeStyle.Render(fmt.Sprintf(" [%d queued]", count))
-}
-
-func renderWaitingBadge(count int) string {
-	if count == 0 {
-		return ""
-	}
-	return queueWaitingStyle.Render(fmt.Sprintf(" [%d waiting]", count))
 }
 
 func truncateQueueContent(s string, maxLen int) string {

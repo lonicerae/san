@@ -495,22 +495,11 @@ func (m *model) SetTokenUsage(resp *core.InferResponse) {
 
 func (m *model) HasRunningTasks() bool { return m.services.Tracker.HasInProgress() }
 
-func (m *model) HandleAgentMessage(msg core.Message) tea.Cmd {
-	if msg.Signal != "" || msg.Role != core.RoleUser {
-		return nil
-	}
-	if _, ok := m.userInput.Queue.RemoveFirstSentToInbox(); !ok {
-		return nil
-	}
-	if m.userInput.Queue.SelectIdx >= 0 {
-		if m.userInput.Queue.Len() == 0 {
-			m.userInput.ExitQueueSelection()
-		} else {
-			m.userInput.LoadQueueItemIntoTextarea()
-		}
-	}
-	m.conv.Append(core.ChatMessage{Role: core.RoleUser, Content: msg.Content, DisplayContent: msg.DisplayContent, Images: msg.Images})
-	return tea.Batch(m.CommitMessages()...)
+// HandleAgentMessage observes the agent's MessageEvent echoes. Every path
+// that hands a user message to the agent appends to m.conv at the call site,
+// so the echo has nothing to do here — appending again would double-display.
+func (m *model) HandleAgentMessage(core.Message) tea.Cmd {
+	return nil
 }
 
 func (m *model) ProcessToolResult(tr core.ToolResult) *core.ToolResult {
@@ -831,16 +820,10 @@ func (m *model) drainTurnQueues() (tea.Cmd, bool) {
 	// Drain ONE user message per call so each gets its own agent response.
 	// The agent's inner loop also drains one inbox message at a time,
 	// producing one TurnEvent per queued message.
-	if item, ok := m.userInput.Queue.DequeuePending(); ok {
-		remaining := m.userInput.Queue.Len()
-		log.QueueLog("drainTurnQueues: dequeued %q sentToInbox=%v remaining=%d", truncate(item.Content, 60), item.SentToInbox, remaining)
+	if item, ok := m.userInput.Queue.Dequeue(); ok {
+		log.QueueLog("drainTurnQueues: dequeued %q remaining=%d", truncate(item.Content, 60), m.userInput.Queue.Len())
 		m.conv.Append(core.ChatMessage{Role: core.RoleUser, Content: item.Content, Images: item.Images})
-		log.QueueLog("drainTurnQueues: sending to inbox")
 		m.services.Agent.Send(item.Content, item.Images)
-		return nil, true
-	}
-	if m.userInput.Queue.WaitingCount() > 0 {
-		log.QueueLog("drainTurnQueues: waiting for sent queued message injection")
 		return nil, true
 	}
 

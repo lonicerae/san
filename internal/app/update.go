@@ -209,10 +209,8 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 
 	case tea.KeyCtrlU:
-		if m.userInput.Queue.PendingCount() > 0 {
+		if m.userInput.Queue.Len() > 0 {
 			m.userInput.Queue.Clear()
-			m.userInput.Queue.SelectIdx = -1
-			m.userInput.Queue.Stashed = ""
 			return nil, true
 		}
 		return nil, false

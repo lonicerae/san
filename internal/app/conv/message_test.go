@@ -160,7 +160,7 @@ func TestRenderTurnUsageSummaryShowsPerTurnTokens(t *testing.T) {
 	}
 }
 
-func TestRenderModeStatusHidesQueueBadgeWhenNoPendingItems(t *testing.T) {
+func TestRenderModeStatusHidesQueueBadgeWhenEmpty(t *testing.T) {
 	rendered := RenderModeStatus(OperationModeParams{
 		ModelName:  "gpt-test",
 		QueueCount: 0,
@@ -171,24 +171,9 @@ func TestRenderModeStatusHidesQueueBadgeWhenNoPendingItems(t *testing.T) {
 	}
 }
 
-func TestRenderModeStatusShowsWaitingBadge(t *testing.T) {
-	rendered := stripANSI(RenderModeStatus(OperationModeParams{
-		ModelName:    "gpt-test",
-		WaitingCount: 1,
-		Width:        80,
-	}))
-	if !strings.Contains(rendered, "[1 waiting]") {
-		t.Fatalf("RenderModeStatus() = %q, want waiting badge", rendered)
-	}
-	if strings.Contains(rendered, "queued") {
-		t.Fatalf("RenderModeStatus() = %q, should not show queued badge for waiting input", rendered)
-	}
-}
-
-func TestRenderQueuePreviewShowsWaitingItems(t *testing.T) {
+func TestRenderQueuePreviewShowsItems(t *testing.T) {
 	rendered := stripANSI(RenderQueuePreview([]QueuePreviewItem{{
 		Content: "Codex review 建议如何运行?",
-		Waiting: true,
 	}}, -1, 80))
 
 	for _, want := range []string{"Codex review"} {

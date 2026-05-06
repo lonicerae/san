@@ -20,7 +20,6 @@ type SubmitRuntime interface {
 	CommitMessages() []tea.Cmd
 	QuitWithCancel() (tea.Cmd, bool)
 	StartProviderTurn(content string) tea.Cmd
-	SendToActiveAgent(content string, images []core.Image) tea.Cmd
 }
 
 type SubmitDeps struct {
@@ -42,8 +41,8 @@ func HandleSubmit(deps SubmitDeps) tea.Cmd {
 	}
 
 	if deps.Conversation.Stream.Active {
-		log.QueueLog("HandleSubmit: stream active, enqueue+send %q", input)
-		return enqueueAndSend(deps, input)
+		log.QueueLog("HandleSubmit: stream active, enqueue %q", input)
+		return enqueueDeferred(deps, input)
 	}
 
 	log.QueueLog("HandleSubmit: stream idle, normal submit %q", input)
@@ -51,19 +50,20 @@ func HandleSubmit(deps SubmitDeps) tea.Cmd {
 	return ExecuteSubmitRequest(deps, SubmitRequest{Input: input})
 }
 
-// enqueueAndSend puts the message in the TUI queue for display ordering and
-// also sends it directly to the agent inbox so it can be picked up immediately
-// after the current turn without waiting for the TUI event loop round-trip.
-func enqueueAndSend(deps SubmitDeps, input string) tea.Cmd {
+// enqueueDeferred parks the message in the TUI queue while the current turn
+// is streaming. The queue is the single source of truth for waiting input —
+// at the next turn boundary the message is popped FIFO, appended to the
+// conversation, and handed to the agent. Until then the user can still edit,
+// reorder, or cancel it.
+func enqueueDeferred(deps SubmitDeps, input string) tea.Cmd {
 	images := deps.Input.PendingImages()
 	if deps.Input.Queue.Enqueue(input, images) < 0 {
 		deps.Conversation.AddNotice("Input queue is full. Please wait for the current turn to complete.")
 		return nil
 	}
-	deps.Input.Queue.MarkSentToInbox(deps.Input.Queue.Len() - 1)
 	deps.Input.Reset()
-	log.QueueLog("enqueueAndSend: queued+inbox %q queueLen=%d", input, deps.Input.Queue.Len())
-	return deps.Actions.SendToActiveAgent(input, images)
+	log.QueueLog("enqueueDeferred: queued %q queueLen=%d", input, deps.Input.Queue.Len())
+	return nil
 }
 
 func DrainInputQueue(deps SubmitDeps) tea.Cmd {

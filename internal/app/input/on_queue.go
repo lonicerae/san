@@ -10,11 +10,15 @@ import (
 
 const maxQueueSize = 50
 
+// QueueItem is a user-typed message captured while the agent is mid-turn.
+// Items live in the queue until the next turn boundary, when one is popped
+// (FIFO), appended to the conversation, and handed to the agent. Until that
+// moment the item is fully owned by the TUI — editable, cancelable,
+// reorderable.
 type QueueItem struct {
-	ID          int
-	Content     string
-	Images      []core.Image
-	SentToInbox bool
+	ID      int
+	Content string
+	Images  []core.Image
 }
 
 type Queue struct {
@@ -44,20 +48,8 @@ func (q *Queue) Dequeue() (QueueItem, bool) {
 	item := q.items[0]
 	q.items[0] = QueueItem{}
 	q.items = q.items[1:]
+	q.adjustSelectionAfterRemove(0)
 	return item, true
-}
-
-func (q *Queue) DequeuePending() (QueueItem, bool) {
-	for i, item := range q.items {
-		if item.SentToInbox {
-			continue
-		}
-		q.items[i] = QueueItem{}
-		q.items = append(q.items[:i], q.items[i+1:]...)
-		q.adjustSelectionAfterRemove(i)
-		return item, true
-	}
-	return QueueItem{}, false
 }
 
 func (q *Queue) At(idx int) (QueueItem, bool) {
@@ -73,37 +65,7 @@ func (q *Queue) Items() []QueueItem {
 	return out
 }
 
-func (q *Queue) PendingItems() []QueueItem {
-	out := make([]QueueItem, 0, len(q.items))
-	for _, item := range q.items {
-		if !item.SentToInbox {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
 func (q *Queue) Len() int { return len(q.items) }
-
-func (q *Queue) PendingCount() int {
-	count := 0
-	for _, item := range q.items {
-		if !item.SentToInbox {
-			count++
-		}
-	}
-	return count
-}
-
-func (q *Queue) WaitingCount() int {
-	count := 0
-	for _, item := range q.items {
-		if item.SentToInbox {
-			count++
-		}
-	}
-	return count
-}
 
 func (q *Queue) LastIndex() int {
 	if len(q.items) == 0 {
@@ -112,21 +74,13 @@ func (q *Queue) LastIndex() int {
 	return len(q.items) - 1
 }
 
-func (q *Queue) LastPendingIndex() int {
-	for i := len(q.items) - 1; i >= 0; i-- {
-		if !q.items[i].SentToInbox {
-			return i
-		}
-	}
-	return -1
-}
-
 func (q *Queue) UpdateAt(idx int, content string, images []core.Image) bool {
 	if idx < 0 || idx >= len(q.items) {
 		return false
 	}
 	if content == "" && len(images) == 0 {
 		q.items = append(q.items[:idx], q.items[idx+1:]...)
+		q.adjustSelectionAfterRemove(idx)
 		return true
 	}
 	q.items[idx].Content = content
@@ -134,32 +88,15 @@ func (q *Queue) UpdateAt(idx int, content string, images []core.Image) bool {
 	return true
 }
 
-func (q *Queue) MarkSentToInbox(idx int) {
-	if idx >= 0 && idx < len(q.items) {
-		q.items[idx].SentToInbox = true
-	}
+func (q *Queue) Clear() {
+	q.items = nil
+	q.ResetSelection()
 }
 
-// RemoveFirstSentToInbox removes the oldest item that has been sent to the
-// agent inbox and returns it. The queue and the inbox channel both preserve
-// FIFO order, so the agent's first user-message echo always corresponds to
-// the first sent-to-inbox item — content matching is unnecessary and brittle
-// (e.g. an empty- vs. nil-images mismatch would silently keep the item
-// stuck in the queue).
-func (q *Queue) RemoveFirstSentToInbox() (QueueItem, bool) {
-	for i, item := range q.items {
-		if !item.SentToInbox {
-			continue
-		}
-		q.items[i] = QueueItem{}
-		q.items = append(q.items[:i], q.items[i+1:]...)
-		q.adjustSelectionAfterRemove(i)
-		return item, true
-	}
-	return QueueItem{}, false
+func (q *Queue) ResetSelection() {
+	q.SelectIdx = -1
+	q.Stashed = ""
 }
-
-func (q *Queue) Clear() { q.items = nil }
 
 func (q *Queue) adjustSelectionAfterRemove(idx int) {
 	if q.SelectIdx < 0 {
@@ -167,8 +104,7 @@ func (q *Queue) adjustSelectionAfterRemove(idx int) {
 	}
 	switch {
 	case len(q.items) == 0:
-		q.SelectIdx = -1
-		q.Stashed = ""
+		q.ResetSelection()
 	case q.SelectIdx > idx:
 		q.SelectIdx--
 	case q.SelectIdx >= len(q.items):
@@ -253,11 +189,11 @@ func (m *Model) EnterQueueSelection() {
 
 // ExitQueueSelection leaves queue selection mode and restores stashed input.
 func (m *Model) ExitQueueSelection() {
-	m.Queue.SelectIdx = -1
-	m.Textarea.SetValue(m.Queue.Stashed)
+	stashed := m.Queue.Stashed
+	m.Queue.ResetSelection()
+	m.Textarea.SetValue(stashed)
 	m.Textarea.CursorEnd()
 	m.UpdateHeight()
-	m.Queue.Stashed = ""
 }
 
 // SaveCurrentQueueEdit writes the current textarea content back to the
@@ -266,11 +202,11 @@ func (m *Model) SaveCurrentQueueEdit() {
 	if m.Queue.SelectIdx < 0 || m.Queue.SelectIdx >= m.Queue.Len() {
 		return
 	}
-	content := strings.TrimSpace(m.Textarea.Value())
 	item, ok := m.Queue.At(m.Queue.SelectIdx)
 	if !ok {
 		return
 	}
+	content := strings.TrimSpace(m.Textarea.Value())
 	m.Queue.UpdateAt(m.Queue.SelectIdx, content, item.Images)
 }
 

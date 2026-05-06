@@ -350,8 +350,7 @@ func (m *Model) Reset() {
 	m.Textarea.SetHeight(minTextareaHeight)
 	m.ClearPaste()
 	m.ClearImages()
-	m.Queue.SelectIdx = -1
-	m.Queue.Stashed = ""
+	m.Queue.ResetSelection()
 }
 
 func (m *Model) HandleCwdChange(newCwd string) {

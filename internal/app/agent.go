@@ -200,19 +200,6 @@ func (m *model) wireReminderProviders() {
 	}))
 }
 
-// SendToActiveAgent sends a message to the agent inbox synchronously during
-// Update so it's available immediately for the agent's post-ThinkAct drain.
-// The inbox channel is buffered (16), so this won't block.
-func (m *model) SendToActiveAgent(content string, images []core.Image) tea.Cmd {
-	if m.services.Agent.Active() {
-		log.QueueLog("SendToActiveAgent: sending to inbox %q", truncate(content, 60))
-		m.services.Agent.Send(content, images)
-	} else {
-		log.QueueLog("SendToActiveAgent: agent NOT active, message lost %q", truncate(content, 60))
-	}
-	return nil
-}
-
 func (m *model) StopAgentSession() {
 	m.services.Agent.Stop()
 }
