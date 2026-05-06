@@ -3,6 +3,14 @@
 All notable changes to Gen Code are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.17.2] - 2026-05-06
+
+### Added
+- BigModel (Zhipu GLM) LLM provider
+
+### Changed
+- Add queue depth metrics and improve queue processing
+
 ## [v1.17.1] - 2026-05-05
 
 ### Added
