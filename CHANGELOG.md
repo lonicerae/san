@@ -3,6 +3,11 @@
 All notable changes to Gen Code are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.17.4] - 2026-05-06
+
+### Changed
+- Simplify input queue to single-source-of-truth FIFO model, removing SentToInbox/WaitingCount tracking and the "waiting" badge
+
 ## [v1.17.3] - 2026-05-06
 
 ### Added
