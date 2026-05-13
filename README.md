@@ -19,17 +19,17 @@ Gen Code is a terminal coding assistant with interchangeable LLM providers, assi
   <img src="docs/open-architecture.svg" alt="Gen Code open architecture — four dimensions: model providers, search engines, role switching, and skills/extensions" width="100%">
 </p>
 
-- **LLM providers** — Anthropic, OpenAI, Google, Moonshot, Alibaba, MiniMax, Z.ai (GLM). Runtime selection via `/model`.
-- **Assistant personas** — Markdown-defined identities at user or project scope; switch with `/identity` ([details](docs/system-prompt.md#identity-custom-personas)).
-- **Search engines** — Exa, Tavily, Brave, or Serper; switch with `/search`.
+- **LLM providers** — Anthropic, OpenAI, Google, Moonshot, Alibaba, MiniMax, Z.ai (GLM); swap via `/model`.
+- **Search backends** — Exa, Tavily, Brave, Serper; swap via `/search`.
+- **Personas** — Markdown identities scoped to user or project; swap via `/identity` ([details](docs/system-prompt.md#identity-custom-personas)).
 
 ### Extensibility
 
-- **Claude Code compatible** — Existing skills, plugins, and MCP servers work unchanged.
-- **Skills** — User- and project-level activation.
-- **Subagents** — Configurable permission modes, tool whitelists, and optional sandboxing.
+- **Claude Code compatible** — Skills, plugins, and MCP servers run unmodified.
+- **Skills** — User and project scope.
+- **Subagents** — Configurable permission modes, tool whitelists, optional sandboxing.
 - **Lifecycle hooks** — Shell, LLM, agent, and HTTP backends.
-- **Project memory** — User- and project-level instructions auto-loaded.
+- **Project memory** — User and project instructions auto-loaded.
 
 ### Engineering
 
