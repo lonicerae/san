@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/genai-io/gen-code/internal/core"
 	"github.com/genai-io/gen-code/internal/llm"
@@ -164,8 +165,10 @@ func (c *Client) Stream(ctx context.Context, opts llm.CompletionOptions) <-chan 
 			maxTokens = thinkingBudget + 8192 // leave room for the actual response
 		}
 
+		modelID, reqOpts := resolveModelOpts(opts.Model)
+
 		params := anthropic.MessageNewParams{
-			Model:     anthropic.Model(opts.Model),
+			Model:     anthropic.Model(modelID),
 			MaxTokens: maxTokens,
 			Messages:  anthropicMsgs,
 		}
@@ -193,7 +196,7 @@ func (c *Client) Stream(ctx context.Context, opts llm.CompletionOptions) <-chan 
 		log.LogRequestCtx(ctx, c.name, opts.Model, opts)
 
 		// Create streaming request
-		stream := c.client.Messages.NewStreaming(ctx, params)
+		stream := c.client.Messages.NewStreaming(ctx, params, reqOpts...)
 
 		state := streamutil.NewState(c.name)
 
@@ -385,6 +388,15 @@ func sanitizeToolResults(msgs []core.Message) []core.Message {
 	}
 
 	return result
+}
+
+const extendedContextSuffix = "[1m]"
+
+func resolveModelOpts(model string) (string, []option.RequestOption) {
+	if base, ok := strings.CutSuffix(model, extendedContextSuffix); ok {
+		return base, []option.RequestOption{option.WithHeader("anthropic-beta", "context-1m-2025-08-07")}
+	}
+	return model, nil
 }
 
 func anthropicThinkingBudget(model, effort string) int {
