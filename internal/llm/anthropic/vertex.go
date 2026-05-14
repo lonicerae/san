@@ -27,12 +27,18 @@ var VertexMeta = llm.Meta{
 // Note: Vertex AI does not provide a stable Anthropic Models API, so we use a
 // static list and refresh it when Anthropic/Vertex documentation changes.
 var vertexModels = []llm.ModelInfo{
-	newVertexModel("claude-opus-4-1@20250805", "Claude Opus 4.1", "Claude Opus 4.1 (Most Capable)"),
+	newVertexModel("claude-opus-4-7", "Claude Opus 4.7", "Claude Opus 4.7 (Most Capable)"),
+	newVertexModel("claude-opus-4-6[1m]", "Claude Opus 4.6 (1M)", "Claude Opus 4.6 (1M Context)"),
+	newVertexModel("claude-opus-4-6", "Claude Opus 4.6", "Claude Opus 4.6"),
+	newVertexModel("claude-opus-4-5", "Claude Opus 4.5", "Claude Opus 4.5"),
+	newVertexModel("claude-opus-4-1@20250805", "Claude Opus 4.1", "Claude Opus 4.1"),
 	newVertexModel("claude-opus-4@20250514", "Claude Opus 4", "Claude Opus 4"),
+	newVertexModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "Claude Sonnet 4.6"),
+	newVertexModel("claude-sonnet-4-5", "Claude Sonnet 4.5", "Claude Sonnet 4.5"),
 	newVertexModel("claude-sonnet-4@20250514", "Claude Sonnet 4", "Claude Sonnet 4"),
 	newVertexModel("claude-3-7-sonnet@20250219", "Claude Sonnet 3.7", "Claude Sonnet 3.7"),
-	newVertexModel("claude-3-5-haiku@20241022", "Claude Haiku 3.5", "Claude Haiku 3.5 (Fast)"),
-	newVertexModel("claude-3-haiku@20240307", "Claude Haiku 3", "Claude Haiku 3"),
+	newVertexModel("claude-haiku-4-5", "Claude Haiku 4.5", "Claude Haiku 4.5 (Fast)"),
+	newVertexModel("claude-3-5-haiku@20241022", "Claude Haiku 3.5", "Claude Haiku 3.5"),
 }
 
 // VertexClient wraps the standard Client with Vertex-specific behavior

@@ -23,13 +23,43 @@ type catalogEntry struct {
 
 var anthropicCatalog = []catalogEntry{
 	{
+		match:            matchAnyPrefix("claude-opus-4-7"),
+		info:             newModelInfo("claude-opus-4-7", "Claude Opus 4.7", "Claude Opus 4.7 (Most Capable)", 200000),
+		supportsThinking: true,
+	},
+	{
+		match:            matchAnyPrefix("claude-opus-4-6[1m]"),
+		info:             newModelInfo("claude-opus-4-6[1m]", "Claude Opus 4.6 (1M)", "Claude Opus 4.6 (1M Context)", 1000000),
+		supportsThinking: true,
+	},
+	{
+		match:            matchAnyPrefix("claude-opus-4-6"),
+		info:             newModelInfo("claude-opus-4-6", "Claude Opus 4.6", "Claude Opus 4.6", 200000),
+		supportsThinking: true,
+	},
+	{
+		match:            matchAnyPrefix("claude-opus-4-5"),
+		info:             newModelInfo("claude-opus-4-5-20251101", "Claude Opus 4.5", "Claude Opus 4.5", 200000),
+		supportsThinking: true,
+	},
+	{
 		match:            matchAnyPrefix("claude-opus-4-1"),
-		info:             newModelInfo("claude-opus-4-1-20250805", "Claude Opus 4.1", "Claude Opus 4.1 (Most Capable)", 200000),
+		info:             newModelInfo("claude-opus-4-1-20250805", "Claude Opus 4.1", "Claude Opus 4.1", 200000),
 		supportsThinking: true,
 	},
 	{
 		match:            matchAnyPrefix("claude-opus-4"),
 		info:             newModelInfo("claude-opus-4-20250514", "Claude Opus 4", "Claude Opus 4", 200000),
+		supportsThinking: true,
+	},
+	{
+		match:            matchAnyPrefix("claude-sonnet-4-6"),
+		info:             newModelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6", "Claude Sonnet 4.6", 200000),
+		supportsThinking: true,
+	},
+	{
+		match:            matchAnyPrefix("claude-sonnet-4-5"),
+		info:             newModelInfo("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", "Claude Sonnet 4.5", 200000),
 		supportsThinking: true,
 	},
 	{
@@ -43,12 +73,12 @@ var anthropicCatalog = []catalogEntry{
 		supportsThinking: true,
 	},
 	{
-		match: matchAnyPrefix("claude-3-5-haiku"),
-		info:  newModelInfo("claude-3-5-haiku-20241022", "Claude Haiku 3.5", "Claude Haiku 3.5 (Fast)", 200000),
+		match: matchAnyPrefix("claude-haiku-4-5"),
+		info:  newModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "Claude Haiku 4.5 (Fast)", 200000),
 	},
 	{
-		match: matchAnyPrefix("claude-3-haiku"),
-		info:  newModelInfo("claude-3-haiku-20240307", "Claude Haiku 3", "Claude Haiku 3", 200000),
+		match: matchAnyPrefix("claude-3-5-haiku"),
+		info:  newModelInfo("claude-3-5-haiku-20241022", "Claude Haiku 3.5", "Claude Haiku 3.5", 200000),
 	},
 }
 
