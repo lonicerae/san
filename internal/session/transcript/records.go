@@ -8,11 +8,17 @@ import (
 // Record type values follow <entity>.<verb> (past tense), lowercase,
 // dot-separated. See docs/tracing.md for the full taxonomy.
 const (
-	SessionStarted   = "session.started"
-	SessionForked    = "session.forked"
-	SessionCompacted = "session.compacted"
-	MessageAppended  = "message.appended"
-	StatePatched     = "state.patched"
+	SessionStarted       = "session.started"
+	SessionForked        = "session.forked"
+	SessionCompacted     = "session.compacted"
+	MessageAppended      = "message.appended"
+	StatePatched         = "state.patched"
+	InferenceRequested   = "inference.requested"
+	InferenceResponded   = "inference.responded"
+	SystemSectionAdded   = "system.section.added"
+	SystemSectionRemoved = "system.section.removed"
+	ToolsAdded           = "tools.added"
+	ToolsRemoved         = "tools.removed"
 )
 
 const (
@@ -37,9 +43,12 @@ type Record struct {
 	GitBranch   string `json:"gitBranch,omitempty"`
 	AgentID     string `json:"agentId,omitempty"`
 
-	Message *MessageRecord `json:"message,omitempty"`
-	State   *StateRecord   `json:"state,omitempty"`
-	Session *SessionRecord `json:"session,omitempty"`
+	Message   *MessageRecord       `json:"message,omitempty"`
+	State     *StateRecord         `json:"state,omitempty"`
+	Session   *SessionRecord       `json:"session,omitempty"`
+	Inference *InferenceRecord     `json:"inference,omitempty"`
+	System    *SystemSectionRecord `json:"system,omitempty"`
+	Tools     *ToolsRecord         `json:"tools,omitempty"`
 }
 
 type MessageRecord struct {
@@ -66,6 +75,63 @@ type SessionRecord struct {
 	Model      string `json:"model,omitempty"`
 	ParentID   string `json:"parentId,omitempty"`
 	BoundaryID string `json:"boundaryId,omitempty"`
+}
+
+// InferenceRecord carries the payload for inference.requested /
+// inference.responded. The "requested" side captures the digests of what was
+// sent to the LLM (system prompt, tools, active message chain); the "responded"
+// side captures stop reason, latency, and token usage. Big fields live in the
+// digests — full payloads are reconstructible by replaying preceding records.
+type InferenceRecord struct {
+	Turn         int    `json:"turn"`
+	Provider     string `json:"provider,omitempty"`
+	Model        string `json:"model,omitempty"`
+	MaxTokens    int    `json:"maxTokens,omitempty"`
+	SystemDigest string `json:"systemDigest,omitempty"`
+	ToolsDigest  string `json:"toolsDigest,omitempty"`
+
+	// MessageIDs is the active chain at request time, in send order.
+	// Recorded on inference.requested only.
+	MessageIDs []string `json:"messageIds,omitempty"`
+
+	// Response fields — populated on inference.responded only.
+	StopReason string         `json:"stopReason,omitempty"`
+	LatencyMs  int64          `json:"latencyMs,omitempty"`
+	Usage      *InferenceUsage `json:"usage,omitempty"`
+}
+
+type InferenceUsage struct {
+	InputTokens       int `json:"inputTokens"`
+	OutputTokens      int `json:"outputTokens"`
+	CacheCreateTokens int `json:"cacheCreateTokens,omitempty"`
+	CacheReadTokens   int `json:"cacheReadTokens,omitempty"`
+}
+
+// SystemSectionRecord carries the payload for system.section.added /
+// system.section.removed. On removal, Content is empty.
+type SystemSectionRecord struct {
+	Name    string `json:"name"`
+	Slot    int    `json:"slot,omitempty"`
+	Content string `json:"content,omitempty"`
+	Caller  string `json:"caller,omitempty"`
+}
+
+// ToolSchemaView mirrors a tool schema in transcript-local types so the
+// transcript package stays free of cross-package imports. Recorder converts
+// from the runtime ToolSchema before writing.
+type ToolSchemaView struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// ToolsRecord carries the payload for tools.added / tools.removed.
+// One tool per record (Add/Remove fire individually); Schema is set on
+// "added", Name on "removed".
+type ToolsRecord struct {
+	Schema *ToolSchemaView `json:"schema,omitempty"`
+	Name   string          `json:"name,omitempty"`
+	Caller string          `json:"caller,omitempty"`
 }
 
 type ContentBlock struct {

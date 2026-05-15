@@ -149,6 +149,78 @@ func (s *FileStore) PatchState(ctx context.Context, cmd PatchStateCommand) error
 	return s.refreshIndexLocked(cmd.SessionID)
 }
 
+func (s *FileStore) AppendTools(ctx context.Context, cmd AppendToolsCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cmd.Type != ToolsAdded && cmd.Type != ToolsRemoved {
+		return fmt.Errorf("append tools: unexpected type %q", cmd.Type)
+	}
+
+	rec := cmd.Record
+	full := Record{
+		ID:        fmt.Sprintf("%s:tools:%d", cmd.SessionID, cmd.Time.UnixNano()),
+		SessionID: cmd.SessionID,
+		Time:      cmd.Time,
+		Type:      cmd.Type,
+		AgentID:   cmd.AgentID,
+		Tools:     &rec,
+	}
+	return s.appendRecord(s.transcriptPath(cmd.SessionID), full, false)
+}
+
+func (s *FileStore) AppendSystemSection(ctx context.Context, cmd AppendSystemSectionCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cmd.Type != SystemSectionAdded && cmd.Type != SystemSectionRemoved {
+		return fmt.Errorf("append system section: unexpected type %q", cmd.Type)
+	}
+
+	rec := cmd.Record
+	full := Record{
+		ID:        fmt.Sprintf("%s:system:%d", cmd.SessionID, cmd.Time.UnixNano()),
+		SessionID: cmd.SessionID,
+		Time:      cmd.Time,
+		Type:      cmd.Type,
+		AgentID:   cmd.AgentID,
+		System:    &rec,
+	}
+	return s.appendRecord(s.transcriptPath(cmd.SessionID), full, false)
+}
+
+func (s *FileStore) AppendInference(ctx context.Context, cmd AppendInferenceCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cmd.Type != InferenceRequested && cmd.Type != InferenceResponded {
+		return fmt.Errorf("append inference: unexpected type %q", cmd.Type)
+	}
+
+	rec := cmd.Record
+	full := Record{
+		ID:        fmt.Sprintf("%s:inference:%d", cmd.SessionID, cmd.Time.UnixNano()),
+		SessionID: cmd.SessionID,
+		Time:      cmd.Time,
+		Type:      cmd.Type,
+		AgentID:   cmd.AgentID,
+		Inference: &rec,
+	}
+	// inference.responded sync-flushes the file so any preceding telemetry
+	// (system.section.*, tools.*, inference.requested) from this turn lands
+	// on disk together; inference.requested itself stays in the page cache.
+	return s.appendRecord(s.transcriptPath(cmd.SessionID), full, cmd.Type == InferenceResponded)
+}
+
 func (s *FileStore) Compact(ctx context.Context, cmd CompactCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -355,15 +427,19 @@ func (s *FileStore) indexPath() string {
 }
 
 // appendRecord writes one record to the JSONL. fsync is gated by sync so
-// hot-path telemetry can be buffered in the OS page cache and rolled up to
-// disk at turn boundaries.
+// hot-path telemetry (system.section.*, tools.*, inference.requested) can be
+// buffered in the OS page cache and rolled up to disk at turn boundaries.
 //
 // Durability classes:
-//   - sync=true: user input (message.appended), lifecycle events
-//     (session.started, session.compacted), and turn-completion writes.
+//   - sync=true: user input (message.appended), turn-completion
+//     (inference.responded), lifecycle events (session.started, session.compacted).
 //     A crash after these must not lose them.
-//   - sync=false: pure telemetry (state.patched today; more in follow-up
-//     commits). Worst case on crash: in-flight turn's telemetry is lost.
+//   - sync=false: pure telemetry. Worst case on crash: the in-flight turn's
+//     telemetry is lost, but the message/state of preceding turns is intact
+//     because their write fsynced.
+//
+// Single-process per file: the append+close pair preserves order regardless
+// of fsync; durability is the only thing the flag toggles.
 func (s *FileStore) appendRecord(path string, rec Record, sync bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create transcript dir: %w", err)
