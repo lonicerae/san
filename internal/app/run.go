@@ -134,7 +134,7 @@ func runPrint(userMessage string) error {
 	if current != nil {
 		p, err := llm.GetProvider(ctx, current.Provider, current.AuthMethod)
 		if err != nil {
-			return fmt.Errorf("provider %s (%s) not available: %w. Run 'gen' and use /provider to connect",
+			return fmt.Errorf("provider %s (%s) not available: %w. Run 'gen' and use /model to connect",
 				current.Provider, current.AuthMethod, err)
 		}
 		llmProvider = p

@@ -175,8 +175,7 @@ Keybindings:
   Ctrl+C       Clear input / Quit
 
 Slash Commands:
-  /provider    Select and connect to a provider
-  /model       Select a model
+  /model       Select model and manage provider connections
   /clear       Clear chat history
   /help        Show help
 
