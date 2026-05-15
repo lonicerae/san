@@ -11,44 +11,73 @@ import (
 )
 
 type StartCommand struct {
-	TranscriptID string
-	ProjectID    string
-	Cwd          string
-	Provider     string
-	Model        string
-	ParentID     string
-	Time         time.Time
+	SessionID string
+	ProjectID string
+	Cwd       string
+	Provider  string
+	Model     string
+	ParentID  string
+	Time      time.Time
 }
 
 type AppendMessageCommand struct {
-	TranscriptID string
-	MessageID    string
-	ParentID     string
-	Time         time.Time
-	Cwd          string
-	GitBranch    string
-	AgentID      string
-	IsSidechain  bool
-	Role         string
-	Content      []ContentBlock
+	SessionID   string
+	MessageID   string
+	ParentID    string
+	Time        time.Time
+	Cwd         string
+	GitBranch   string
+	AgentID     string
+	IsSidechain bool
+	Role        string
+	Content     []ContentBlock
 }
 
 type PatchStateCommand struct {
-	TranscriptID string
-	Time         time.Time
-	Ops          []PatchOp
+	SessionID string
+	Time      time.Time
+	Ops       []PatchOp
 }
 
 type CompactCommand struct {
-	TranscriptID string
-	Time         time.Time
-	BoundaryID   string
+	SessionID  string
+	Time       time.Time
+	BoundaryID string
 }
 
 type ForkCommand struct {
-	SourceTranscriptID string
-	NewTranscriptID    string
-	Time               time.Time
+	SourceSessionID string
+	NewSessionID    string
+	Time            time.Time
+}
+
+// AppendInferenceCommand writes either an inference.requested or
+// inference.responded record. Type selects which; Record carries the payload.
+type AppendInferenceCommand struct {
+	SessionID string
+	AgentID   string
+	Time      time.Time
+	Type      string // InferenceRequested or InferenceResponded
+	Record    InferenceRecord
+}
+
+// AppendSystemSectionCommand writes system.section.added or
+// system.section.removed. Removed sections drop Content from Record.
+type AppendSystemSectionCommand struct {
+	SessionID string
+	AgentID   string
+	Time      time.Time
+	Type      string // SystemSectionAdded or SystemSectionRemoved
+	Record    SystemSectionRecord
+}
+
+// AppendToolsCommand writes tools.added or tools.removed.
+type AppendToolsCommand struct {
+	SessionID string
+	AgentID   string
+	Time      time.Time
+	Type      string // ToolsAdded or ToolsRemoved
+	Record    ToolsRecord
 }
 
 type ListOptions struct {
