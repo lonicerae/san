@@ -3,6 +3,25 @@
 All notable changes to Gen Code are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.18.0] - 2026-05-17
+
+### Added
+- Add native DeepSeek provider with updated model catalog and V4 readiness checks (zhujian)
+- Add Claude model catalog updates including 1M context support (zhujian)
+- Add trace recorder for inference, system, tools, and content provenance (Meng Yan)
+- Add web viewer for session tracing and inspection (Meng Yan)
+
+### Changed
+- Rename trace concepts to inspector and update related system prompts (Meng Yan)
+- Unify record/payload naming and append-only transcript persistence with fsync batching (Meng Yan)
+- Refine README feature, usage, configuration, skills, extensions, and open-architecture documentation (Meng Yan)
+
+### Fixed
+- Canonicalize `/model` command usage and remove the `/provider` alias (zhujian, Meng Yan)
+- Fix stable message IDs, unconditional state patches, and early `session.started` telemetry writes (Meng Yan)
+- Escape session IDs in the viewer and deduplicate SSE records across reconnects (Meng Yan)
+- Address DeepSeek provider review feedback (zhujian)
+
 ## [v1.17.4] - 2026-05-06
 
 ### Changed
