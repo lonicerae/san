@@ -27,9 +27,9 @@ This file tracks structural follow-ups that are not tied to a single feature.
   `internal/app.newServices()` instead of pulling from each package's
   package-level singleton. Eliminates the two-flavor accessor pattern
   (`Default` panics; `DefaultIfInit` is nil-tolerant).
-- **`skill.AddPluginSkills` uses anonymous struct slice.** Replace with
-  a named `PluginSkillSource` type so the exported API is
-  go-doc-readable.
+- ~~**`skill.AddPluginSkills` uses anonymous struct slice.**~~ Resolved
+  by deleting the method entirely — it had zero callers and the
+  `addPluginPath` / `additionalPaths` plumbing behind it was dead too.
 
 ### Adapter cleanups
 

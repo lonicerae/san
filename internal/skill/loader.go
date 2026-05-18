@@ -26,8 +26,7 @@ type pluginInstall struct {
 
 // Loader handles loading skills from multiple directories.
 type loader struct {
-	cwd             string       // Current working directory for project-level skills
-	additionalPaths []searchPath // Additional paths from plugins
+	cwd string // Current working directory for project-level skills
 }
 
 // searchPath represents a skill search location with optional namespace.
@@ -42,20 +41,6 @@ func newLoader(cwd string) *loader {
 	return &loader{
 		cwd: cwd,
 	}
-}
-
-// addPluginPath adds a plugin skill path to the loader.
-// Plugin paths are searched after user-level but before project-level skills.
-func (l *loader) addPluginPath(path, namespace string, isProjectScope bool) {
-	scope := ScopeUserPlugin
-	if isProjectScope {
-		scope = ScopeProjectPlugin
-	}
-	l.additionalPaths = append(l.additionalPaths, searchPath{
-		path:      path,
-		scope:     scope,
-		namespace: namespace,
-	})
 }
 
 // getSearchPaths returns skill directories in priority order (lowest to highest).
@@ -99,34 +84,6 @@ func (l *loader) getSearchPaths() []searchPath {
 		path:  filepath.Join(l.cwd, ".gen", "skills"),
 		scope: ScopeProject,
 	})
-
-	// Insert additional plugin paths at appropriate positions
-	if len(l.additionalPaths) > 0 {
-		// Separate user and project plugin paths
-		var userPluginPaths, projectPluginPaths []searchPath
-		for _, ap := range l.additionalPaths {
-			if ap.scope == ScopeProjectPlugin {
-				projectPluginPaths = append(projectPluginPaths, ap)
-			} else {
-				userPluginPaths = append(userPluginPaths, ap)
-			}
-		}
-
-		// Insert at correct positions
-		// User plugin paths go after ScopeUser (position after ~/.gen/skills)
-		// Project plugin paths go after ScopeClaudeProject (before ScopeProject)
-		var result []searchPath
-		for _, p := range paths {
-			result = append(result, p)
-			switch p.scope {
-			case ScopeUser:
-				result = append(result, userPluginPaths...)
-			case ScopeClaudeProject:
-				result = append(result, projectPluginPaths...)
-			}
-		}
-		return result
-	}
 
 	return paths
 }

@@ -21,13 +21,6 @@ type Service interface {
 	PromptSection() string                       // rendered section for system prompt
 	GetSkillInvocationPrompt(name string) string // full skill content for injection
 
-	// plugin
-	AddPluginSkills(paths []struct {
-		Path      string
-		Namespace string
-		IsProject bool
-	})
-
 	// concrete access
 	Registry() *Registry
 }

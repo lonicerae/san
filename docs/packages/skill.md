@@ -53,13 +53,6 @@ type Service interface {
     PromptSection() string                       // rendered section for system prompt
     GetSkillInvocationPrompt(name string) string // full skill content for injection
 
-    // plugin
-    AddPluginSkills(paths []struct {
-        Path      string
-        Namespace string
-        IsProject bool
-    })
-
     // concrete access
     Registry() *Registry
 }
@@ -71,29 +64,27 @@ type Service interface {
 
 Tracked for PR-3. The contract above is verbatim from today's code.
 
-- **Rule 1 (small).** **12 methods** across four concerns. Suggested split:
+- **Rule 1 (small).** **11 methods** across four concerns. Suggested split:
   - `SkillQuery` → `List`, `Get`, `Count` (or pick three of the seven
     query methods; consolidate `IsEnabled` / `GetEnabled` / `GetActive`
     behind a `Filter(state SkillState)` if downstream usage permits)
   - `SkillStateStore` → `SetEnabled`, `GetDisabledAt`
   - `SkillPrompt` → `PromptSection`, `GetSkillInvocationPrompt`
-  - `SkillSourceRegistrar` → `AddPluginSkills`
   - Remove `Registry()` (see Rule 7)
 - **Rule 7 (no escape hatch).** `Registry() *Registry` lets every caller
   reach the concrete type. Drop it; if a caller needs methods that aren't
   on `Service`, add them to the appropriate split interface or have the
   caller depend on `*Registry` directly.
-- **Rule 4 (named types over anonymous structs).** `AddPluginSkills` takes
-  `[]struct { Path string; Namespace string; IsProject bool }`. Define
-  `type PluginSkillSource struct { ... }` and take `[]PluginSkillSource`.
-  Anonymous structs in exported signatures cannot be referenced by name
-  and break go-doc readability.
 - **Rule 5 (constructors return concrete types).** `Default()` returns
   `Service` (interface). Should return `*Registry` if callers are
   collaborators in the same module.
 - **Singleton via `Default()` and `DefaultIfInit()`.** Same issue as
   `hook` and `agent`: two-flavor accessors paper over racy init. Move
   construction into the app composition root.
+
+*Resolved in this PR:* removed the unused exported `AddPluginSkills`
+method (and its `addPluginPath` / `additionalPaths` plumbing), which
+was the only Rule 4 (anonymous struct) violation in the package.
 
 ## Internals
 
