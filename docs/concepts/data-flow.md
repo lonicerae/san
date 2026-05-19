@@ -1,5 +1,7 @@
 # Data Flow: Input → Agent → Render
 
+> 中文版本：[`data-flow.zh.md`](data-flow.zh.md)
+
 How a keystroke (or a cron fire, or a hub event) travels through the TUI
 and becomes either a slash-command result or an agent response that the
 user sees in their terminal.
