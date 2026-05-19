@@ -101,7 +101,7 @@ func (m *model) dispatchSubmission(raw string) tea.Cmd {
 	}
 	m.conv.Append(msg)
 	m.userInput.Reset()
-	return m.SubmitToAgent(msg.Content)
+	return m.SubmitToAgent(msg.Content, msg.Images)
 }
 
 // runSlashCommandIfMatched returns (cmd, true) if `raw` is a slash command
@@ -148,36 +148,29 @@ func (m *model) drainInputQueueAfterCancel() tea.Cmd {
 	return m.dispatchSubmission(item.Content)
 }
 
-// SubmitToAgent ensures the agent session is up and sends `content` to
-// its inbox. The returned cmd runs the agent's outbox poller; agent events
-// flow back through Update → routeFeatureUpdate → conv.Update → model
-// conv.Runtime callbacks (see model_agent_events.go).
-func (m *model) SubmitToAgent(content string) tea.Cmd {
+// SubmitToAgent is the single exit point for every "send this content to
+// the agent" path — user Enter, slash command output, skill button, cron
+// fire, hook continuation, hub notification. It ensures the agent session
+// is up, hands `content` + `images` to the agent's inbox, and returns a
+// cmd that polls the outbox. Agent events flow back through Update →
+// routeFeatureUpdate → conv.Update → model conv.Runtime callbacks
+// (see model_agent_events.go).
+//
+// On error (no provider connected, ensureAgentSession failed), appends a
+// notice to conv and returns a commit cmd — the agent is not contacted.
+func (m *model) SubmitToAgent(content string, images []core.Image) tea.Cmd {
 	log.QueueLog("SubmitToAgent: %q", truncate(content, 60))
 	if m.env.LLMProvider == nil {
-		m.conv.Append(core.ChatMessage{
-			Role:    core.RoleNotice,
-			Content: "No provider connected. Use /model to connect.",
-		})
-		return tea.Batch(m.CommitMessages()...)
+		return m.notifyNoProvider()
 	}
 
 	startCmd, err := m.ensureAgentSession(content)
 	if err != nil {
-		m.conv.Append(core.ChatMessage{
-			Role:    core.RoleNotice,
-			Content: "Failed to start agent: " + err.Error(),
-		})
+		m.conv.AddNotice("Failed to start agent: " + err.Error())
 		return tea.Batch(m.CommitMessages()...)
 	}
 
 	m.env.DetectThinkingKeywords(content)
-
-	var images []core.Image
-	if len(m.conv.Messages) > 0 {
-		lastMsg := m.conv.Messages[len(m.conv.Messages)-1]
-		images = lastMsg.Images
-	}
 
 	sendCmd := m.sendToAgent(content, images)
 	if startCmd != nil {
@@ -186,28 +179,25 @@ func (m *model) SubmitToAgent(content string) tea.Cmd {
 	return sendCmd
 }
 
-// HandleSkillInvocation is the equivalent of dispatchSubmission for skill
-// button clicks. The skill provides the content (no textarea, no slash
-// detection); we still need to ensure the agent and send the message.
+// notifyNoProvider appends the standard "no provider connected" notice and
+// returns a commit cmd. Used by SubmitToAgent and callers that need to do
+// extra cleanup (e.g. skill ClearPending) before falling through to the
+// same message.
+func (m *model) notifyNoProvider() tea.Cmd {
+	m.conv.AddNotice("No provider connected. Use /model to connect.")
+	return tea.Batch(m.CommitMessages()...)
+}
+
+// HandleSkillInvocation runs the agent against a pending skill invocation.
+// Skill button -> consume the queued invocation -> append to conv -> hand
+// off to SubmitToAgent. Provider check is up front because we want to
+// clear the pending skill state when there's nothing we can do.
 func (m *model) HandleSkillInvocation() tea.Cmd {
 	if m.env.LLMProvider == nil {
-		m.conv.AddNotice("No provider connected. Use /model to connect.")
 		m.userInput.Skill.ClearPending()
-		return tea.Batch(m.CommitMessages()...)
+		return m.notifyNoProvider()
 	}
-
-	startCmd, err := m.ensureAgentSession("")
-	if err != nil {
-		m.conv.AddNotice("Failed to start agent: " + err.Error())
-		m.userInput.Skill.ClearPending()
-		return tea.Batch(m.CommitMessages()...)
-	}
-
 	displayMsg, fullMsg := m.userInput.Skill.ConsumeInvocation()
 	m.conv.Append(core.ChatMessage{Role: core.RoleUser, Content: fullMsg, DisplayContent: displayMsg})
-	sendCmd := m.sendToAgent(fullMsg, nil)
-	if startCmd != nil {
-		return tea.Batch(startCmd, sendCmd)
-	}
-	return sendCmd
+	return m.SubmitToAgent(fullMsg, nil)
 }
