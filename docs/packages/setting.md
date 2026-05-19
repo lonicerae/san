@@ -5,7 +5,7 @@ layer: feature
 
 # setting
 
-Settings loader, merger, and the central permission decision gate.
+Data loader, merger, and the central permission decision gate.
 Reads `~/.gen/settings.json` and `<project>/.gen/settings.json`, merges
 project-over-user with documented precedence, and decides allow / deny /
 ask for every tool call.
@@ -24,54 +24,40 @@ Two concerns live here:
 
 ## Contract
 
+Data loader + central permission decision gate. *Settings wraps *Data under a mutex; methods are mutex-protected views. The package exposes `*Settings` directly — no Service interface.
+
 ```go
 package setting
 
-// Service is the public contract for the setting module.
-type Service interface {
-    // Snapshot returns the current merged settings.
-    Snapshot() *Settings
-    AllowBypass() bool
-    IsGitRepo(cwd string) bool
-    Reload(cwd string) error
-    DisabledTools() map[string]bool
-    SearchProvider() string
-    SetSearchProvider(provider string)
-    Hooks() map[string][]Hook
+// Settings is the opaque handle. Type exported; fields unexported.
+type Settings struct { /* internal fields */ }
 
-    // permission gate
-    CheckPermission(toolName string, args map[string]any, session *SessionPermissions) PermissionBehavior
-    HasPermissionToUseTool(toolName string, args map[string]any, session *SessionPermissions) PermissionDecision
-    ResolveHookAllow(toolName string, args map[string]any, session *SessionPermissions) bool
+func (s *Settings) Snapshot() *Data
+func (s *Settings) AllowBypass() bool
+func (s *Settings) IsGitRepo(cwd string) bool
+func (s *Settings) Reload(cwd string) error
+func (s *Settings) DisabledTools() map[string]bool
+func (s *Settings) SearchProvider() string
+func (s *Settings) SetSearchProvider(provider string)
+func (s *Settings) Hooks() map[string][]Hook
+func (s *Settings) CheckPermission(toolName string, args map[string]any, session *SessionPermissions) PermissionBehavior
+func (s *Settings) HasPermissionToUseTool(toolName string, args map[string]any, session *SessionPermissions) PermissionDecision
+func (s *Settings) ResolveHookAllow(toolName string, args map[string]any, session *SessionPermissions) bool
+func (s *Settings) GetDisabledToolsAt(userLevel bool) map[string]bool
+func (s *Settings) UpdateDisabledToolsAt(disabledTools map[string]bool, userLevel bool) error
 
-    // per-level disabled tools
-    GetDisabledToolsAt(userLevel bool) map[string]bool
-    UpdateDisabledToolsAt(disabledTools map[string]bool, userLevel bool) error
-}
+// Package-level access
+func Initialize(opts Options)
+func Default() *Settings
+func DefaultIfInit() *Settings           // nil pre-Initialize
+func SetDefaultSettings(s *Settings)      // test-only
+func ResetDefaultSettings()              // test-only
 ```
 
-### Known Violations
-
-- **Rule 1 (small) — 14 methods.** Two concerns (config + permission)
-  fused. Suggested split into two packages or two interfaces:
-  - `Settings` → snapshot/reload/disabled-tools/search-provider/hooks
-  - `PermissionGate` → CheckPermission / HasPermissionToUseTool /
-    ResolveHookAllow / AllowBypass
-  This split matches the actual code surface and would let
-  `internal/tool` depend on `PermissionGate` alone.
-- **Rule 7 (no escape hatch).** `Snapshot() *Settings` returns a clone of
-  the concrete struct, which exposes every field. Most callers only need
-  a few — narrow with focused accessors.
-- **Rule 5.** `Default()` returns `Service`.
-- **Singleton via `Default()` + `DefaultIfInit()`.**
-- **Permission API surface is wide.** `CheckPermission`,
-  `HasPermissionToUseTool`, and `ResolveHookAllow` overlap in concern.
-  Consolidating into a single `Decide(req) PermissionDecision` would
-  simplify both callers and tests.
 
 ## Internals
 
-- `Settings` (`settings.go`) — value type holding all merged config.
+- `Data` (`settings.go`) — value type holding all merged config.
 - `loader.go` + `merger.go` — read the two tiers and combine them with
   documented precedence (project overrides user, except in a few flagged
   fields).

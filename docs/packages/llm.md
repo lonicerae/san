@@ -20,42 +20,30 @@ streaming details for each call.
 
 ## Contract
 
+Active LLM provider/model handle and `*Client` factory. Wraps the package-level *Setup (Store + Provider + CurrentModel) under a mutex. The package exposes `*ClientFactory` directly — no Service interface.
+
 ```go
 package llm
 
-// Service is the public contract for the llm module.
-type Service interface {
-    // connection
-    Provider() Provider              // current active provider
-    SetProvider(p Provider)          // switch provider
-    ModelID() string                 // current model identifier
-    CurrentModel() *CurrentModelInfo // full model metadata
-    SetCurrentModel(info *CurrentModelInfo)
+// ClientFactory is the opaque handle. Type exported; fields unexported.
+type ClientFactory struct { /* internal fields */ }
 
-    // factory
-    NewClient(model string, maxTokens int) *Client
+func (s *ClientFactory) Provider() Provider
+func (s *ClientFactory) SetProvider(p Provider)
+func (s *ClientFactory) ModelID() string
+func (s *ClientFactory) CurrentModel() *CurrentModelInfo
+func (s *ClientFactory) SetCurrentModel(info *CurrentModelInfo)
+func (s *ClientFactory) NewClient(model string, maxTokens int) *Client
+func (s *ClientFactory) Store() *Store
+func (s *ClientFactory) ListProviders() map[Name][]Info
 
-    // store
-    Store() *Store // underlying provider persistence store
-
-    // registry
-    ListProviders() map[Name][]Info // all registered providers with status
-}
+// Package-level access
+func Initialize(opts Options)
+func Default() *ClientFactory
+func SetDefaultClientFactory(s *ClientFactory)  // test-only
+func ResetDefaultClientFactory()          // test-only
 ```
 
-`Client` implements `core.LLM`. `Provider` is the per-backend handle
-(API key, auth method, list-models endpoint).
-
-### Known Violations
-
-- **Rule 1 (small).** 8 methods. Mixes connection state, factory, store
-  access, and registry listing. Suggested split: `LLMConnection`
-  (Provider/SetProvider/Model methods), `LLMClientFactory` (NewClient),
-  `LLMProviderRegistry` (ListProviders).
-- **Rule 7 (no escape hatch).** `Store()` exposes the concrete `*Store`.
-  Callers should depend on a narrower read-only view.
-- **Rule 5.** `Default()` returns `Service` not `*service`.
-- **Singleton via `Default()`.**
 
 ## Internals
 
