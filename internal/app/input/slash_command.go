@@ -20,6 +20,7 @@ import (
 	"github.com/genai-io/gen-code/internal/mcp"
 	"github.com/genai-io/gen-code/internal/plugin"
 	"github.com/genai-io/gen-code/internal/session"
+	"github.com/genai-io/gen-code/internal/setting"
 	"github.com/genai-io/gen-code/internal/skill"
 	"github.com/genai-io/gen-code/internal/task/tracker"
 	"github.com/genai-io/gen-code/internal/tool"
@@ -28,21 +29,23 @@ import (
 type commandHandler func(*CommandController, context.Context, string) (string, tea.Cmd, error)
 
 type CommandDeps struct {
+	// UI state: the textarea, conversation render state, tool exec state,
+	// terminal dimensions, current working directory, and the input-token
+	// snapshot for context-percent displays.
 	Input        *Model
 	Conversation *conv.ConversationModel
 	Tool         *conv.ToolExecState
 	Width        int
 	Height       int
 	Cwd          string
+	InputTokens  int
 
-	// Read-only state
-	DisabledTools map[string]bool
-	ProviderStore *llm.Store
-	LLMProvider   llm.Provider
-	InputTokens   int
-	CurrentModel  *llm.CurrentModelInfo
-
-	// Domain services
+	// Domain services. Commands read live state from these — never snapshot
+	// at deps construction time, since /something might mutate state that a
+	// later command reads (e.g. /disabled-tools then /tools).
+	Setting *setting.Settings
+	LLM     *llm.ClientFactory
+	Session *session.Setup
 	Skill   *skill.Registry
 	Plugin  *plugin.Registry
 	MCP     *mcp.Registry
@@ -51,18 +54,15 @@ type CommandDeps struct {
 	ToolSvc *tool.Registry
 	Command *command.Registry
 
-	// State getters (values that may change during command execution)
-	GetSessionID      func() string
-	GetSessionStore   func() *session.Store
+	// Env-state callbacks. `m.env` lives in the parent app package and
+	// can't be imported here without a cycle, so its reads/writes are
+	// surfaced as callbacks.
 	GetThinkingEffort func() string
+	SetThinkingEffort func(string)
+	ResetTokens       func()
 
-	// Mutation callbacks
-	ResetTokens        func()
-	SetThinkingEffort  func(string)
-	EnsureSessionStore func(cwd string) error
-	ForkSession        func() (originalSessionID string, err error)
-
-	// Existing callbacks
+	// Model-level action callbacks. These compose multiple services or
+	// touch UI state on `m`, so commands invoke them via the model.
 	CommitMessages          func() []tea.Cmd
 	SubmitToAgent           func(content string, images []core.Image) tea.Cmd
 	HandleSkillInvocation   func() tea.Cmd
@@ -76,6 +76,7 @@ type CommandDeps struct {
 	BuildCompactRequest     func(focus, trigger string) conv.CompactRequest
 	SpinnerTickCmd          func() tea.Cmd
 	ResetCronQueue          func()
+	ForkSession             func() (originalSessionID string, err error)
 }
 
 type CommandController struct {
@@ -293,7 +294,7 @@ func (c *CommandController) handleForkCommand(_ context.Context, _ string) (stri
 	if err := c.deps.PersistSession(); err != nil {
 		return "", nil, fmt.Errorf("failed to save session before fork: %w", err)
 	}
-	if c.deps.GetSessionID() == "" {
+	if c.deps.Session.ID() == "" {
 		return "No active session to fork.", nil, nil
 	}
 	originalID, err := c.deps.ForkSession()
@@ -306,17 +307,17 @@ func (c *CommandController) handleForkCommand(_ context.Context, _ string) (stri
 }
 
 func (c *CommandController) handleResumeCommand(_ context.Context, _ string) (string, tea.Cmd, error) {
-	if err := c.deps.EnsureSessionStore(c.deps.Cwd); err != nil {
+	if err := c.deps.Session.EnsureStore(c.deps.Cwd); err != nil {
 		return "", nil, fmt.Errorf("failed to initialize session store: %w", err)
 	}
-	if err := c.deps.Input.Session.Selector.EnterSelect(c.deps.Width, c.deps.Height, c.deps.GetSessionStore(), c.deps.Cwd); err != nil {
+	if err := c.deps.Input.Session.Selector.EnterSelect(c.deps.Width, c.deps.Height, c.deps.Session.GetStore(), c.deps.Cwd); err != nil {
 		return "", nil, fmt.Errorf("failed to open session selector: %w", err)
 	}
 	return "", nil, nil
 }
 
 func (c *CommandController) handleSearchCommand(_ context.Context, _ string) (string, tea.Cmd, error) {
-	if err := c.deps.Input.Search.Enter(c.deps.ProviderStore, c.deps.Width, c.deps.Height); err != nil {
+	if err := c.deps.Input.Search.Enter(c.deps.LLM.Store(), c.deps.Width, c.deps.Height); err != nil {
 		return "", nil, err
 	}
 	return "", nil, nil
@@ -444,7 +445,7 @@ func (c *CommandController) handleToolCommand(_ context.Context, _ string) (stri
 	if c.deps.MCP != nil {
 		mcpTools = c.deps.MCP.GetToolSchemas
 	}
-	if err := c.deps.Input.Tool.EnterSelect(c.deps.Width, c.deps.Height, c.deps.DisabledTools, mcpTools); err != nil {
+	if err := c.deps.Input.Tool.EnterSelect(c.deps.Width, c.deps.Height, c.deps.Setting.DisabledTools(), mcpTools); err != nil {
 		return "", nil, err
 	}
 	return "", nil, nil
@@ -466,10 +467,10 @@ func (c *CommandController) handleAgentCommand(_ context.Context, _ string) (str
 
 func (c *CommandController) handleThinkCommand(_ context.Context, args string) (string, tea.Cmd, error) {
 	model := ""
-	if c.deps.CurrentModel != nil {
-		model = c.deps.CurrentModel.ModelID
+	if c.deps.LLM.CurrentModel() != nil {
+		model = c.deps.LLM.CurrentModel().ModelID
 	}
-	efforts := llm.ThinkingEfforts(c.deps.LLMProvider, model)
+	efforts := llm.ThinkingEfforts(c.deps.LLM.Provider(), model)
 	if len(efforts) == 0 {
 		return "Current provider does not support thinking effort.", nil, nil
 	}
@@ -477,7 +478,7 @@ func (c *CommandController) handleThinkCommand(_ context.Context, args string) (
 	arg := strings.TrimSpace(strings.ToLower(args))
 	var effort string
 	if arg == "" || arg == "toggle" {
-		next, _ := llm.NextThinkingEffort(c.deps.LLMProvider, model, c.deps.GetThinkingEffort())
+		next, _ := llm.NextThinkingEffort(c.deps.LLM.Provider(), model, c.deps.GetThinkingEffort())
 		effort = next
 	} else {
 		if arg == "off" && !containsThinkingEffort(efforts, "off") && containsThinkingEffort(efforts, "none") {
@@ -610,9 +611,9 @@ func loopUsage() string {
 
 func (c *CommandController) handleTokenLimitCommand(_ context.Context, args string) (string, tea.Cmd, error) {
 	result, cmd, err := HandleTokenLimitCommand(TokenLimitDeps{
-		CurrentModel: c.deps.CurrentModel,
-		Provider:     c.deps.LLMProvider,
-		Store:        c.deps.ProviderStore,
+		CurrentModel: c.deps.LLM.CurrentModel(),
+		Provider:     c.deps.LLM.Provider(),
+		Store:        c.deps.LLM.Store(),
 		InputTokens:  c.deps.InputTokens,
 		Cwd:          c.deps.Cwd,
 		SpinnerTick:  c.deps.SpinnerTickCmd(),
@@ -625,7 +626,7 @@ func (c *CommandController) handleTokenLimitCommand(_ context.Context, args stri
 }
 
 func (c *CommandController) handleCompactCommand(_ context.Context, args string) (string, tea.Cmd, error) {
-	if c.deps.LLMProvider == nil {
+	if c.deps.LLM.Provider() == nil {
 		return "No provider connected. Use /model to connect.", nil, nil
 	}
 	if len(c.deps.Conversation.Messages) == 0 {

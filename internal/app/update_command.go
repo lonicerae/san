@@ -1,5 +1,9 @@
 // Slash-command execution: builds CommandDeps from services + env state,
 // runs commands through input.NewCommandController.
+//
+// Note: services are passed by reference so commands read live state at
+// execution time. Snapshot values (UI dimensions, InputTokens, Cwd) are
+// captured here because they don't change while a command runs.
 package app
 
 import (
@@ -8,24 +12,23 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/genai-io/gen-code/internal/app/input"
-	"github.com/genai-io/gen-code/internal/session"
 )
 
 func (m *model) commandDeps() input.CommandDeps {
 	return input.CommandDeps{
+		// UI state
 		Input:        &m.userInput,
 		Conversation: &m.conv.ConversationModel,
 		Tool:         &m.conv.Tool,
 		Width:        m.env.Width,
 		Height:       m.env.Height,
 		Cwd:          m.env.CWD,
+		InputTokens:  m.env.InputTokens,
 
-		DisabledTools: m.services.Setting.DisabledTools(),
-		ProviderStore: m.services.LLM.Store(),
-		LLMProvider:   m.env.LLMProvider,
-		InputTokens:   m.env.InputTokens,
-		CurrentModel:  m.env.CurrentModel,
-
+		// Services
+		Setting: m.services.Setting,
+		LLM:     m.services.LLM,
+		Session: m.services.Session,
 		Command: m.services.Command,
 		Skill:   m.services.Skill,
 		Plugin:  m.services.Plugin,
@@ -34,15 +37,12 @@ func (m *model) commandDeps() input.CommandDeps {
 		Cron:    m.services.Cron,
 		ToolSvc: m.services.Tool,
 
-		GetSessionID:      func() string { return m.services.Session.ID() },
-		GetSessionStore:   func() *session.Store { return m.services.Session.GetStore() },
+		// Env callbacks
 		GetThinkingEffort: func() string { return m.env.EffectiveThinkingEffort() },
+		SetThinkingEffort: func(effort string) { m.env.ThinkingEffort = effort },
+		ResetTokens:       m.env.ResetTokens,
 
-		ResetTokens:        m.env.ResetTokens,
-		SetThinkingEffort:  func(effort string) { m.env.ThinkingEffort = effort },
-		EnsureSessionStore: func(cwd string) error { return m.services.Session.EnsureStore(cwd) },
-		ForkSession:        m.forkSession,
-
+		// Model actions
 		CommitMessages:          m.CommitMessages,
 		SubmitToAgent:           m.SubmitToAgent,
 		HandleSkillInvocation:   m.HandleSkillInvocation,
@@ -56,6 +56,7 @@ func (m *model) commandDeps() input.CommandDeps {
 		BuildCompactRequest:     m.BuildCompactRequest,
 		SpinnerTickCmd:          m.SpinnerTickCmd,
 		ResetCronQueue:          m.ResetCronQueue,
+		ForkSession:             m.forkSession,
 	}
 }
 
