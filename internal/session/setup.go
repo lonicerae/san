@@ -81,13 +81,6 @@ func (s *Setup) GetStore() *Store {
 	return s.Store
 }
 
-// SetStore replaces the session store.
-func (s *Setup) SetStore(st *Store) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Store = st
-}
-
 // Save persists a session snapshot via the store.
 func (s *Setup) Save(snap *Snapshot) error {
 	s.mu.RLock()
@@ -119,17 +112,6 @@ func (s *Setup) LoadLatest() (*Snapshot, error) {
 		return nil, fmt.Errorf("session store not initialized")
 	}
 	return st.GetLatest()
-}
-
-// List returns metadata for all sessions via the store.
-func (s *Setup) List() ([]*SessionMetadata, error) {
-	s.mu.RLock()
-	st := s.Store
-	s.mu.RUnlock()
-	if st == nil {
-		return nil, fmt.Errorf("session store not initialized")
-	}
-	return st.List()
 }
 
 // Fork forks a session by ID via the store.

@@ -18,47 +18,69 @@ duplicates one mid-stream.
 
 ## Contract
 
+No producer-side `Service` interface. Consumers of session don't share
+a narrow common surface — the agent loop wants `NewRecorder` + `ID`;
+the app composition root wants `Save` / `Load` / `LoadLatest` /
+`EnsureStore` / `SetID`; the TUI selector wants `*Store` directly. A
+union interface would just be `*Setup` with a rename, which TEMPLATE
+Rule 3 forbids. If a future caller benefits from narrowing, declare a
+small consumer-defined interface in that caller's package.
+
 ```go
 package session
 
-// Service is the public contract for the session module.
-type Service interface {
-    // identity
-    ID() string
-    SetID(id string)
-    TranscriptPath() string
-
-    // store access
-    GetStore() *Store
-    SetStore(s *Store)
-    EnsureStore(cwd string) error
-
-    // persistence (delegates to store)
-    Save(snap *Snapshot) error
-    Load(id string) (*Snapshot, error)
-    LoadLatest() (*Snapshot, error)
-    List() ([]*SessionMetadata, error)
-    Fork(id string) (*Snapshot, error)
-
-    // tracing
-    NewRecorder(agentID, provider, model string, maxTokens int) *Recorder
-    Recorder() *Recorder
+// Setup is the per-process session state: ID, store, recorder. Owned
+// by the app composition root; accessed by feature packages through
+// the methods below.
+type Setup struct {
+    Store     *Store
+    SessionID string
+    /* unexported */
 }
+
+// Identity + store
+func (s *Setup) ID() string
+func (s *Setup) SetID(id string)
+func (s *Setup) TranscriptPath() string
+func (s *Setup) GetStore() *Store
+func (s *Setup) EnsureStore(cwd string) error
+
+// Persistence (delegates to *Store)
+func (s *Setup) Save(snap *Snapshot) error
+func (s *Setup) Load(id string) (*Snapshot, error)
+func (s *Setup) LoadLatest() (*Snapshot, error)
+func (s *Setup) Fork(id string) (*Snapshot, error)
+
+// Recorder
+func (s *Setup) NewRecorder(agentID, provider, model string, maxTokens int) *Recorder
+func (s *Setup) Recorder() *Recorder
+
+// Package-level access.
+func Initialize(opts Options)
+func Default() *Setup
+func SetDefaultSetup(s *Setup)   // test-only
+func ResetDefaultSetup()         // test-only
 ```
 
-### Known Violations
+### Why no interface
 
-- **Rule 1 (small).** 11 methods spanning identity, store access,
-  persistence, and tracing. Suggested split:
-  - `SessionIdentity` → `ID`, `SetID`, `TranscriptPath`
-  - `SessionStoreAccess` → `GetStore`, `SetStore`, `EnsureStore`
-  - `SessionPersistence` → `Save`, `Load`, `LoadLatest`, `List`, `Fork`
-  - `SessionRecording` → `NewRecorder`, `Recorder`
-- **Rule 7 (no escape hatch).** `GetStore() *Store` and `SetStore(*Store)`
-  let callers reach into the concrete store. If callers need store
-  methods, expose them on `Service` directly or have them depend on
-  `*Store`.
-- **Rule 5.** `Default()` returns `Service`. Reasoning same as elsewhere.
+The previous `session.Service` was an 11-method god union with a
+`GetStore() *Store` / `SetStore(*Store)` escape hatch — the same
+shape mcp.Service and hook.Service had before [#27](https://github.com/genai-io/gen-code/pull/27)
+and [#28](https://github.com/genai-io/gen-code/pull/28). Deleted in
+favor of the concrete `*Setup`.
+
+Two dead methods removed: `SetStore` and `List` had zero non-test
+callers.
+
+`GetStore()` stays — on a concrete type it's a plain getter, not an
+escape hatch. Callers that want `*Store` directly (TUI session
+selector, subagent session bridge) can read `m.services.Session.Store`
+or call `GetStore()`; both are equivalent.
+
+### Remaining Known Violations
+
+None.
 
 ## Internals
 

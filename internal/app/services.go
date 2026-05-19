@@ -27,7 +27,7 @@ type services struct {
 	LLM      llm.Service
 	Tool     tool.Service
 	Hook     *hook.Engine
-	Session  session.Service
+	Session  *session.Setup
 	Skill    skill.Service
 	Subagent subagent.Service
 	Command  command.Service
