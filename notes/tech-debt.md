@@ -11,21 +11,21 @@ This file tracks structural follow-ups that are not tied to a single feature.
 ### Code refactors flagged by `docs/packages/*/Known Violations`
 
 - **God `Service` interfaces.** Split per the per-package suggestions:
-  `plugin` (21), `setting` (14), `skill` (11), `session` (11),
-  `agent` (11), `cron` (10), `subagent` (9), `command` (7),
-  `llm` (8), `task` (8), `tool` (6). Define narrow consumer-defined
-  interfaces alongside the concrete `*service` / `*Registry`; let each
-  call site narrow to what it needs.
-  ~~`mcp` (9 methods)~~ — resolved by deleting `Service` entirely and
-  exposing role interfaces (`Tools`, `Servers`) + `*mcp.Registry`.
-  ~~`hook` (16 methods)~~ — resolved by deleting `Service`, exposing
-  one role interface (`Handler`) + `*hook.Engine` directly.
-- **Escape-hatch methods on Service interfaces.** Drop `.GetStore()` from
-  `session.Service`. Remaining call site: `internal/app/update.go`
-  (`Session.GetStore()`).
-  ~~`MCP.Registry()`~~ — resolved.
-  ~~`Hook.Engine()`~~ — resolved (Service deleted; consumers depend on
-  `hook.Handler` or `*hook.Engine` directly).
+  `plugin` (21), `setting` (14), `skill` (11), `agent` (11),
+  `cron` (10), `subagent` (9), `command` (7), `llm` (8), `task` (8),
+  `tool` (6). Define narrow consumer-defined interfaces alongside the
+  concrete `*service` / `*Registry`; let each call site narrow to
+  what it needs.
+  ~~`mcp` (9 methods)~~ — resolved (`Tools` + `Servers` + `*mcp.Registry`).
+  ~~`hook` (16 methods)~~ — resolved (`Handler` + `*hook.Engine`).
+  ~~`session` (11 methods)~~ — resolved by deleting `Service`, exposing
+  `*session.Setup` directly. No role interface — consumers don't share
+  a narrow common surface.
+- **Escape-hatch methods on Service interfaces.** All resolved:
+  ~~`MCP.Registry()`~~, ~~`Hook.Engine()`~~, ~~`Session.GetStore()`~~
+  / ~~`Session.SetStore()`~~ — Service interfaces deleted in their
+  respective packages; consumers depend on the concrete type or a
+  narrow role interface.
 - **Singleton via `Default()` / `DefaultIfInit()`.** Move construction
   into `cmd/gen` and pass the concrete service into
   `internal/app.newServices()` instead of pulling from each package's

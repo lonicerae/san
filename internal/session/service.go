@@ -1,39 +1,24 @@
+// Package session owns per-run conversation state: session identity,
+// transcript persistence, recorder, fork/load/save. The package exposes
+// the concrete *Setup directly — no Service interface.
+//
+// Why no interface: consumers of session don't share a narrow common
+// surface. The agent loop needs NewRecorder + ID; the app composition
+// root needs Save / Load / LoadLatest / EnsureStore / SetID; the TUI
+// session selector needs *Store. Each caller's slice is different. A
+// producer-side union interface would just be *Setup with a rename;
+// TEMPLATE Rule 3 says don't do that.
+//
+// If a future caller benefits from narrowing, declare a small
+// consumer-defined interface in that caller's package. Until then,
+// *Setup is the contract.
 package session
 
 import (
-	"sync"
-
 	"go.uber.org/zap"
 
 	"github.com/genai-io/gen-code/internal/log"
 )
-
-// Service is the public contract for the session module.
-type Service interface {
-	// identity
-	ID() string
-	SetID(id string)
-	TranscriptPath() string
-
-	// store access
-	GetStore() *Store
-	SetStore(s *Store)
-	EnsureStore(cwd string) error
-
-	// persistence (delegates to store)
-	Save(snap *Snapshot) error
-	Load(id string) (*Snapshot, error)
-	LoadLatest() (*Snapshot, error)
-	List() ([]*SessionMetadata, error)
-	Fork(id string) (*Snapshot, error)
-
-	// tracing
-	NewRecorder(agentID, provider, model string, maxTokens int) *Recorder
-	Recorder() *Recorder
-}
-
-// Compile-time check: *Setup implements Service.
-var _ Service = (*Setup)(nil)
 
 // Options holds configuration for Initialize.
 type Options struct {
@@ -41,6 +26,8 @@ type Options struct {
 }
 
 // Initialize creates a session store and generates a fresh session ID.
+// Installs the result on the package-level *Setup so Default() reflects
+// the new state.
 func Initialize(opts Options) {
 	store, err := NewStore(opts.CWD)
 	if err != nil {
@@ -51,39 +38,26 @@ func Initialize(opts Options) {
 	defaultSetup.SessionID = NewSessionID()
 	defaultSetup.Store = store
 	defaultSetup.mu.Unlock()
-
-	SetDefault(defaultSetup)
 }
 
-// ── singleton ──────────────────────────────────────────────
+// Default returns the package-level *Setup. Returns an empty (no-store,
+// no-session-ID) *Setup until Initialize runs, so callers that touch it
+// pre-init don't crash.
+func Default() *Setup {
+	return defaultSetup
+}
 
-var (
-	mu       sync.RWMutex
-	instance Service
-)
-
-// Default returns the singleton Service instance.
-// Panics if Initialize has not been called.
-func Default() Service {
-	mu.RLock()
-	s := instance
-	mu.RUnlock()
+// SetDefaultSetup replaces the package-level *Setup. Intended for
+// tests. A nil argument restores a fresh empty *Setup.
+func SetDefaultSetup(s *Setup) {
 	if s == nil {
-		panic("session: not initialized")
+		defaultSetup = &Setup{}
+		return
 	}
-	return s
+	defaultSetup = s
 }
 
-// SetDefault replaces the singleton instance. Intended for tests.
-func SetDefault(s Service) {
-	mu.Lock()
-	instance = s
-	mu.Unlock()
-}
-
-// ResetService clears the singleton instance. Intended for tests.
-func ResetService() {
-	mu.Lock()
-	instance = nil
-	mu.Unlock()
+// ResetDefaultSetup restores a fresh empty *Setup. Intended for tests.
+func ResetDefaultSetup() {
+	defaultSetup = &Setup{}
 }
