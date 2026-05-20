@@ -47,11 +47,20 @@ commit 最后一条消息。
 
 [`internal/app/view.go`](../../internal/app/view.go) 里的
 `(*model).View()` 每次 `Update` 后都跑一遍，返回重绘区那串字符。
-**签名是 `func (m *model) View() string`——没有输入参数**，这是
-Bubble Tea 的约定。View 要的所有状态都从 receiver `m` 上读。它派发
-给的渲染函数（`RenderActiveContent` 等）接收一个 `conv.RenderContext`
-struct，这个 struct 由 `m.messageRenderParams()` 在每次调用时从 `m`
-的字段构造。
+
+```go
+func (m *model) View() string {
+    //   ^ Go 里 *model 上的方法；`m` 是当前实例
+    //     （相当于其它语言的 `this`/`self`）。
+    //     整个 codebase 都用 `m` 指代前台 model。
+    ...
+}
+```
+
+**没有输入参数**——这是 Bubble Tea 的约定。View 要读的全部状态都来自
+`m` 的字段。它派发的子渲染函数（`RenderActiveContent` 等）接收
+`conv.RenderContext` struct，这个 struct 是 `m.messageRenderParams()`
+每次调用时从 `m` 的字段组装出来的。
 
 View 从四种布局里挑一种，自顶向下：
 

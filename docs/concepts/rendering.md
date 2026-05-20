@@ -52,11 +52,20 @@ range (scrollback: `0..CommittedCount`; repaint zone:
 
 `(*model).View()` in [`internal/app/view.go`](../../internal/app/view.go)
 runs after every `Update` and returns the string for the repaint zone.
-**Signature is `func (m *model) View() string` — no input parameters**;
-that's a Bubble Tea contract. Everything View needs is read from the
-receiver `m`. The renderers View dispatches to (`RenderActiveContent`,
-etc.) take a `conv.RenderContext` struct, which `m.messageRenderParams()`
-builds from `m`'s fields on each call.
+
+```go
+func (m *model) View() string {
+    //   ^ Go method on *model; `m` is the instance (Go's
+    //     equivalent of `this`/`self`). The whole codebase uses `m`
+    //     for the foreground model.
+    ...
+}
+```
+
+**No input parameters** — that's a Bubble Tea contract. Everything
+View reads comes from `m`'s fields. The sub-renderers it calls
+(`RenderActiveContent` etc.) take a `conv.RenderContext` struct, which
+`m.messageRenderParams()` assembles from `m`'s fields on each call.
 
 View() picks one of four layouts, top-down:
 
