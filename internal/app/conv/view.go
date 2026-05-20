@@ -6,82 +6,130 @@ import (
 	"github.com/genai-io/gen-code/internal/core"
 )
 
-type MessageRenderParams struct {
-	Messages                []core.ChatMessage
-	CommittedCount          int
-	StreamActive            bool
-	BuildingTool            string
-	PendingCalls            []core.ToolCall
-	CurrentIdx              int
-	ModelName               string
-	InputTokens             int
-	OutputTokens            int
-	Blink                   int
-	AgentColors             map[string]string
-	Width                   int
-	MDRenderer              *MDRenderer
-	SpinnerView             string
-	TaskProgress            map[int][]string
-	TaskOwnerMap            map[string]string
+// RenderContext bundles everything per-message rendering needs to read.
+// One instance is built once per render pass (app.messageRenderParams)
+// and threaded down through RenderActiveContent → RenderMessageRange
+// → RenderMessageAt → renderAssistantWithTools.
+type RenderContext struct {
+	// ── Conversation state ──────────────────────────────────────
+	Messages       []core.ChatMessage
+	CommittedCount int
+	// Pairs precomputes which ToolResult messages belong to which
+	// assistant message (one pass over Messages). Lets every render
+	// helper read the relationship without re-scanning the slice.
+	Pairs toolResultPairing
+
+	// ── Streaming + in-flight tool execution ────────────────────
+	StreamActive bool
+	BuildingTool string
+	PendingCalls []core.ToolCall
+	CurrentIdx   int
+
+	// ── Renderer / terminal env ─────────────────────────────────
+	Width      int
+	MDRenderer *MDRenderer
+
+	// ── Per-tick UI state ───────────────────────────────────────
+	SpinnerView  string
+	Blink        int
+	ModelName    string
+	InputTokens  int
+	OutputTokens int
+
+	// ── Decorations (color / progress maps) ─────────────────────
+	AgentColors  map[string]string
+	TaskProgress map[int][]string
+	TaskOwnerMap map[string]string
+
+	// ── Modal interlock — suppress chrome under a tool prompt ───
 	InteractivePromptActive bool
 }
 
-// BuildSkipIndices returns a set of message indices that should be skipped during rendering.
-// Tool result messages are skipped when they are rendered inline with their tool calls.
-func BuildSkipIndices(messages []core.ChatMessage, startIdx int) map[int]bool {
-	skipIndices := make(map[int]bool)
-	for i := startIdx; i < len(messages); i++ {
-		msg := messages[i]
+// toolResultPairing precomputes the assistant ↔ ToolResult relationship
+// in one linear pass over the message slice. Three render helpers used
+// to re-derive this independently with subtly different scans;
+// centralising it here eliminates the drift risk and the O(n²) feel.
+type toolResultPairing struct {
+	// resultOwner: ToolResult message index → owning assistant index.
+	// Used to know which results to SKIP when rendering a range (they
+	// will be drawn inline with their owning assistant instead).
+	resultOwner map[int]int
+	// resultsForAssistant: assistant index → (toolCallID → ToolResultData)
+	// Used by renderAssistantWithTools to draw the paired-results block.
+	resultsForAssistant map[int]map[string]ToolResultData
+}
+
+// PairToolResults walks `messages` once and returns the pairing. Exported
+// because the model builds it inside messageRenderParams; everything else
+// in this package just reads RenderContext.Pairs.
+func PairToolResults(messages []core.ChatMessage) toolResultPairing {
+	p := toolResultPairing{
+		resultOwner:         make(map[int]int),
+		resultsForAssistant: make(map[int]map[string]ToolResultData),
+	}
+	for i, msg := range messages {
 		if msg.Role != core.RoleAssistant || len(msg.ToolCalls) == 0 {
 			continue
 		}
+		owned := make(map[string]struct{}, len(msg.ToolCalls))
+		for _, tc := range msg.ToolCalls {
+			owned[tc.ID] = struct{}{}
+		}
 		for j := i + 1; j < len(messages); j++ {
-			if messages[j].Role == core.RoleNotice {
+			next := messages[j]
+			if next.Role == core.RoleNotice {
 				continue
 			}
-			if messages[j].ToolResult == nil {
+			if next.ToolResult == nil {
 				break
 			}
-			for _, tc := range msg.ToolCalls {
-				if tc.ID == messages[j].ToolResult.ToolCallID {
-					skipIndices[j] = true
-					break
-				}
+			callID := next.ToolResult.ToolCallID
+			if _, ok := owned[callID]; !ok {
+				continue
+			}
+			p.resultOwner[j] = i
+			results := p.resultsForAssistant[i]
+			if results == nil {
+				results = make(map[string]ToolResultData)
+				p.resultsForAssistant[i] = results
+			}
+			results[callID] = ToolResultData{
+				ToolName: next.ToolName,
+				Content:  next.ToolResult.Content,
+				Error:    next.ToolResult.Content,
+				IsError:  next.ToolResult.IsError,
+				Expanded: next.Expanded,
 			}
 		}
 	}
-	return skipIndices
+	return p
 }
 
-func IsToolResultInlined(messages []core.ChatMessage, idx int) bool {
-	msg := messages[idx]
-	if msg.ToolResult == nil {
-		return false
+// ownerOf returns the assistant index that owns the ToolResult at
+// resultIdx, or -1 if the result isn't paired with any assistant in
+// range.
+func (p toolResultPairing) ownerOf(resultIdx int) int {
+	if owner, ok := p.resultOwner[resultIdx]; ok {
+		return owner
 	}
-	toolCallID := msg.ToolResult.ToolCallID
-
-	for j := idx - 1; j >= 0; j-- {
-		prev := messages[j]
-		if prev.Role == core.RoleNotice {
-			continue
-		}
-		if prev.Role == core.RoleAssistant && len(prev.ToolCalls) > 0 {
-			for _, tc := range prev.ToolCalls {
-				if tc.ID == toolCallID {
-					return true
-				}
-			}
-			break
-		}
-		if prev.ToolResult != nil {
-			continue
-		}
-		break
-	}
-	return false
+	return -1
 }
 
-func RenderMessageAt(p MessageRenderParams, idx int, isStreaming bool) string {
+// resultsFor returns the (callID → data) map for an assistant's paired
+// ToolResults, or nil if it has none.
+func (p toolResultPairing) resultsFor(assistantIdx int) map[string]ToolResultData {
+	return p.resultsForAssistant[assistantIdx]
+}
+
+// IsResultInlined reports whether the ToolResult at idx will be drawn
+// inline with its owning assistant (and thus shouldn't render as a
+// standalone message).
+func (p toolResultPairing) IsResultInlined(idx int) bool {
+	_, ok := p.resultOwner[idx]
+	return ok
+}
+
+func RenderMessageAt(p RenderContext, idx int, isStreaming bool) string {
 	msg := p.Messages[idx]
 	var sb strings.Builder
 
@@ -111,7 +159,7 @@ func RenderMessageAt(p MessageRenderParams, idx int, isStreaming bool) string {
 	return sb.String()
 }
 
-func renderAssistantWithTools(p MessageRenderParams, msg core.ChatMessage, idx int, isLast bool) string {
+func renderAssistantWithTools(p RenderContext, msg core.ChatMessage, idx int, isLast bool) string {
 	base := RenderAssistantMessage(AssistantParams{
 		Content:       msg.Content,
 		Thinking:      msg.Thinking,
@@ -135,22 +183,9 @@ func renderAssistantWithTools(p MessageRenderParams, msg core.ChatMessage, idx i
 		sb.WriteString("\n")
 	}
 
-	resultMap := make(map[string]ToolResultData)
-	for j := idx + 1; j < len(p.Messages); j++ {
-		nextMsg := p.Messages[j]
-		if nextMsg.Role == core.RoleNotice {
-			continue
-		}
-		if nextMsg.ToolResult == nil {
-			break
-		}
-		resultMap[nextMsg.ToolResult.ToolCallID] = ToolResultData{
-			ToolName: nextMsg.ToolName,
-			Content:  nextMsg.ToolResult.Content,
-			Error:    nextMsg.ToolResult.Content,
-			IsError:  nextMsg.ToolResult.IsError,
-			Expanded: nextMsg.Expanded,
-		}
+	resultMap := p.Pairs.resultsFor(idx)
+	if resultMap == nil {
+		resultMap = map[string]ToolResultData{}
 	}
 
 	sb.WriteString(RenderToolCalls(ToolCallsParams{
@@ -175,15 +210,17 @@ func renderAssistantWithTools(p MessageRenderParams, msg core.ChatMessage, idx i
 	return sb.String()
 }
 
-func RenderMessageRange(p MessageRenderParams, startIdx, endIdx int, includeSpinner bool) string {
-	skipIndices := BuildSkipIndices(p.Messages, startIdx)
+func RenderMessageRange(p RenderContext, startIdx, endIdx int, includeSpinner bool) string {
 	var sb strings.Builder
 
 	lastIdx := endIdx - 1
 	isLastStreaming := p.StreamActive && lastIdx >= 0 && p.Messages[lastIdx].Role == core.RoleAssistant
 
 	for i := startIdx; i < endIdx; i++ {
-		if skipIndices[i] {
+		// Skip a ToolResult that will be drawn inline with its owning
+		// assistant — but only if the owner is also being rendered in
+		// this range. Orphan results render standalone.
+		if owner := p.Pairs.ownerOf(i); owner >= startIdx {
 			continue
 		}
 		isStreaming := i == lastIdx && isLastStreaming
@@ -197,26 +234,26 @@ func RenderMessageRange(p MessageRenderParams, startIdx, endIdx int, includeSpin
 	return sb.String()
 }
 
-func RenderSingleMessage(p MessageRenderParams, idx int) string {
+func RenderSingleMessage(p RenderContext, idx int) string {
 	if idx < 0 || idx >= len(p.Messages) {
 		return ""
 	}
 
-	if p.Messages[idx].ToolResult != nil && IsToolResultInlined(p.Messages, idx) {
+	if p.Messages[idx].ToolResult != nil && p.Pairs.IsResultInlined(idx) {
 		return ""
 	}
 
 	return strings.TrimRight(RenderMessageAt(p, idx, false), "\n")
 }
 
-func RenderActiveContent(p MessageRenderParams) string {
+func RenderActiveContent(p RenderContext) string {
 	if p.CommittedCount >= len(p.Messages) {
 		return renderPendingToolSpinnerFromParams(p, false)
 	}
 	return RenderMessageRange(p, p.CommittedCount, len(p.Messages), true)
 }
 
-func renderPendingToolSpinnerFromParams(p MessageRenderParams, suppressAgentLabel bool) string {
+func renderPendingToolSpinnerFromParams(p RenderContext, suppressAgentLabel bool) string {
 	return RenderPendingToolSpinner(PendingToolSpinnerParams{
 		InteractivePromptActive: p.InteractivePromptActive,
 		BuildingTool:            p.BuildingTool,
