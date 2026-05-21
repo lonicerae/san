@@ -56,12 +56,19 @@ var (
 )
 
 func InitTheme(t string) {
-	if t != "light" && t != "dark" {
+	switch t {
+	case "light":
+		darkModeSet, darkModeVal = true, false
+		lipgloss.SetHasDarkBackground(false)
+	case "dark":
+		darkModeSet, darkModeVal = true, true
+		lipgloss.SetHasDarkBackground(true)
+	case "auto":
+		darkModeSet = true
+		darkModeVal = lipgloss.HasDarkBackground()
+	default:
 		return
 	}
-	dark := t == "dark"
-	darkModeSet, darkModeVal = true, dark
-	lipgloss.SetHasDarkBackground(dark)
 }
 
 // ResolveTheme ensures a theme is configured.
