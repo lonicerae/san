@@ -7,6 +7,9 @@
     <a href="https://pkg.go.dev/github.com/genai-io/gen-code"><img src="https://pkg.go.dev/badge/github.com/genai-io/gen-code.svg" alt="Go Reference"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
   </p>
+  <p>
+    <strong>English</strong> · <a href="README.zh.md">简体中文</a>
+  </p>
 </div>
 
 Gen Code is a terminal coding assistant with pluggable LLM providers, search engines, personas, and skill/extension surfaces — fully compatible with [Claude Code](https://claude.ai/code) skills, plugins, and MCP servers. Implemented in Go as a single binary with concurrent multi-agent orchestration.
@@ -66,6 +69,8 @@ mkdir -p ~/.local/bin && mv gen ~/.local/bin/
 
 ## Usage
 
+### Start
+
 ```bash
 gen                            # interactive
 gen "explain this function"    # one-shot
@@ -74,9 +79,33 @@ gen --continue                 # resume latest session
 gen --resume                   # pick a past session
 ```
 
-Run `/model` on first launch to connect a provider; `/help` lists all slash commands (`/identity`, `/search`, `/skills`, `/agents`, `/mcp`, `/compact`, `/resume`, …).
+### Configure a model
 
-Keyboard: `Shift+Tab` permission mode · `Ctrl+O` expand tool details · `Ctrl+C` cancel · `Ctrl+D` exit.
+On first launch, run `/model` to pick a provider and model. Gen Code will
+prompt for the API key — or you can set the matching env var (see the
+**Credentials** table below) and Gen Code will pick it up automatically.
+Switch models any time with `/model`; the choice is saved to
+`~/.gen/providers.json`.
+
+### Adjust thinking
+
+For models that support extended reasoning (Claude, GPT-5/o-series,
+Gemini, etc.), press `Ctrl+T` — or run `/think` — to cycle the thinking
+budget. The available levels are provider-specific (Claude:
+`off / normal / high / ultra`; OpenAI reasoning models:
+`none / low / medium / high / xhigh`). The current level is shown in
+the status bar; higher levels trade latency for deeper reasoning.
+
+### Other essentials
+
+- `/help` lists every slash command (`/identity`, `/search`, `/skills`, `/agents`, `/mcp`, `/compact`, `/resume`, …).
+- `Shift+Tab` cycles permission modes (ask · auto-accept · plan).
+- `Ctrl+O` expands tool details · `Ctrl+C` cancels the current turn · `Ctrl+D` exits.
+
+See [`docs/guides/getting-started.md`](docs/guides/getting-started.md)
+for a longer walkthrough and
+[`docs/reference/slash-commands.md`](docs/reference/slash-commands.md)
+for the full command list.
 
 ### Configuration
 
