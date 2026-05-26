@@ -49,11 +49,25 @@ func (m *model) OnCompacted(info core.CompactInfo) tea.Cmd {
 	m.conv.Clear()
 	m.env.ResetContextDisplay()
 	token := m.userInput.Provider.SetStatusMessage("compacted")
-	m.conv.Append(core.ChatMessage{Role: core.RoleUser, Content: core.FormatCompactSummary(info.Summary)})
+	// The full summary stays as the model's context (Content) and is persisted,
+	// but the transcript shows a terse one-liner instead of dumping the raw
+	// summary markdown. DisplayContent is render-only; Content is what the model
+	// and session store keep.
+	m.conv.Append(core.ChatMessage{
+		Role:           core.RoleUser,
+		Content:        core.FormatCompactSummary(info.Summary),
+		DisplayContent: fmt.Sprintf("Summary of %d earlier messages (kept as context).", info.OriginalCount),
+	})
 
 	trigger := info.Trigger
 	if trigger == "" {
 		trigger = "auto"
+	}
+	// Manual /compact shows the SESSION SUMMARY box; complete it here so its
+	// count matches the boundary line (both info.OriginalCount). Auto-compaction
+	// stays silent — just the boundary line.
+	if trigger == "manual" {
+		m.conv.Compact.Complete(fmt.Sprintf("Condensed %d earlier messages.", info.OriginalCount), false)
 	}
 	if m.services.Hook != nil {
 		m.services.Hook.ExecuteAsync(hook.PostCompact, hook.HookInput{Trigger: trigger})
@@ -95,8 +109,11 @@ func (m *model) OnCompactResult(msg conv.CompactResultMsg) tea.Cmd {
 		m.conv.Compact.Complete(fmt.Sprintf("Compaction could not be completed: %v", msg.Error), true)
 		return tea.Batch(m.CommitMessages()...)
 	}
-	m.conv.Compact.Complete(fmt.Sprintf("Condensed %d earlier messages.", msg.OriginalCount), false)
 
+	// Don't complete the SESSION SUMMARY box here: the count is finalized in
+	// OnCompacted from the agent's authoritative message count, so the box and
+	// the boundary line never disagree. The spinner stays until the agent's
+	// CompactEvent arrives.
 	if m.services.Agent.Compact(msg.Summary) {
 		return tea.Batch(m.CommitMessages()...)
 	}

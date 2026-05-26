@@ -97,7 +97,7 @@ func RenderCompactStatus(width int, spinnerView string, state CompactState) stri
 
 	label := "SESSION SUMMARY"
 	title := "Conversation compacted"
-	subtitle := "Older context was folded into a shorter summary. You can continue normally."
+	subtitle := "" // completed state is terse — the detail line carries the count
 	detail := state.LastResult
 	accent := kit.CurrentTheme.Success
 	icon := "✓"
