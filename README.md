@@ -11,11 +11,11 @@
     <strong>English</strong> · <a href="README.zh.md">简体中文</a>
   </p>
   <p>
-    <img src="https://github.com/user-attachments/assets/84cd2770-e2c4-488f-96e0-d512fb3bfb38" alt="Gen Code" width="80%">
+    <img src="assets/gen-code.png" alt="Gen Code" width="100%">
   </p>
 </div>
 
-Gen Code is a terminal coding assistant with pluggable LLM providers, search engines, personas, and skill/extension surfaces — fully compatible with [Claude Code](https://claude.ai/code) skills, plugins, and MCP servers. Implemented in Go as a single binary with concurrent multi-agent orchestration.
+Gen Code is a terminal coding assistant built around five pluggable pillars — **LLMs**, **search backends**, **personas**, **skills & extensions** (skills, plugins, MCP servers, subagents), and a **self-evolving** agent that levels up as you work. Built in Go and shipped as a single binary — a unified runtime for specialized agents.
 
 ## Features
 
@@ -25,6 +25,7 @@ Gen Code is a terminal coding assistant with pluggable LLM providers, search eng
 - **Search backends** — Exa, Tavily, Brave, Serper; swap via `/search`.
 - **Personas** — Markdown identities scoped to user or project; swap via `/identity` ([details](docs/concepts/harness-channels.md#identity-custom-personas)).
 - **Skills & extensions** — Claude Code skills, plugins, and MCP servers run unmodified; sandboxed subagents; lifecycle hooks (shell, LLM, agent, HTTP); auto-loaded project memory.
+- **Self-evolving** *(in progress)* — the agent learns from your sessions and grows more capable over time.
 
 ### Engineering
 
