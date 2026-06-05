@@ -52,6 +52,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            bin/gen_*.tar.gz
+            bin/san_*.tar.gz
             CHANGELOG.md
           body_path: release-notes.md

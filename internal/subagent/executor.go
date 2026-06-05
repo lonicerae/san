@@ -435,7 +435,7 @@ func (e *Executor) capabilityPrompts(config *AgentConfig) (skillsPrompt string, 
 }
 
 // subagentPermissionFunc returns the subagent permission gate. The pipeline
-// matches docs/gen-permission.md: deny_tools, bypass-immune, allow_tools,
+// matches docs/concepts/permission-model.md: deny_tools, bypass-immune, allow_tools,
 // mode default, with Prompt collapsing to Deny because subagents cannot ask.
 func subagentPermissionFunc(mode PermissionMode, allowRules, denyRules ToolList) perm.PermissionFunc {
 	checker := modeChecker(mode)

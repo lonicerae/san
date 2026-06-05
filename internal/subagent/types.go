@@ -16,7 +16,7 @@ import (
 )
 
 // PermissionMode controls the default permission policy for an agent.
-// See docs/gen-permission.md for the full pipeline.
+// See docs/concepts/permission-model.md for the full pipeline.
 type PermissionMode string
 
 const (
@@ -58,7 +58,7 @@ func NormalizePermissionMode(s string) PermissionMode {
 
 // ToolRule is a single allow/deny entry. Pattern follows the unified
 // "Tool(pattern)" glob syntax shared with settings.permissions — see
-// docs/gen-permission.md.
+// docs/concepts/permission-model.md.
 type ToolRule struct {
 	Name    string `yaml:"name" json:"name"`
 	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty"`
@@ -155,7 +155,7 @@ func (t ToolList) HasPattern(name string) bool {
 	return false
 }
 
-// UnmarshalYAML accepts every form documented in docs/gen-permission.md:
+// UnmarshalYAML accepts every form documented in docs/concepts/permission-model.md:
 //   - string list:    "Read, Write, Bash"        (comma-separated)
 //   - sequence:       [Read, Write, Bash(git diff*)]
 //   - sequence map:   [{name: Bash, pattern: "git diff*"}]

@@ -1279,6 +1279,6 @@ wirePromptPanel();
 wireFilters();
 loadSessions();
 // Poll the session list so new transcripts (e.g. the user starting a fresh
-// `gen` in another terminal) show up without a manual refresh. 2s feels
+// `san` in another terminal) show up without a manual refresh. 2s feels
 // snappy and the cost is one cheap JSON list read per tick.
 setInterval(pollSessions, 2000);

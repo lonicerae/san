@@ -409,7 +409,7 @@ func estimatePromptTokens(lastInputTokens, lastPromptTextLen, currentPromptTextL
 //  3. Record results — sequential, in original call order
 //
 // Permission checking is handled by the tool decorator (tool.WithPermission),
-// not by the agent. See docs/gen-permission.md.
+// not by the agent. See docs/concepts/permission-model.md.
 func (a *agent) execTools(ctx context.Context, calls []ToolCall) int {
 	var tasks []agentToolTask
 	for _, tc := range calls {
